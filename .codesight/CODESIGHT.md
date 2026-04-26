@@ -2,9 +2,9 @@
 
 > **Stack:** raw-http | none | unknown | typescript
 
-> 0 routes | 0 models | 0 components | 4 lib files | 1 env vars | 0 middleware | 18 events | 0% test coverage
-> **Token savings:** this file is ~1,000 tokens. Without it, AI exploration would cost ~7,900 tokens. **Saves ~6,900 tokens per conversation.**
-> **Last scanned:** 2026-04-26 20:14 — re-run after significant changes
+> 0 routes | 0 models | 0 components | 4 lib files | 1 env vars | 0 middleware | 19 events | 0% test coverage
+> **Token savings:** this file is ~1,000 tokens. Without it, AI exploration would cost ~8,100 tokens. **Saves ~7,100 tokens per conversation.**
+> **Last scanned:** 2026-04-26 20:15 — re-run after significant changes
 
 ---
 
@@ -89,6 +89,7 @@
 - `term-1` [event] — `src/__tests__/session-store.test.ts`
 - `max-${i}` [event] — `src/__tests__/session-store.test.ts`
 - `max-overflow` [event] — `src/__tests__/session-store.test.ts`
+- `active-ok` [event] — `src/__tests__/session-store.test.ts`
 - `output` [event] — `src/process-session.ts`
 - `line` [event] — `src/process-session.ts`
 

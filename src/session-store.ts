@@ -16,8 +16,16 @@ function scheduleEviction(agentId: string): void {
   timers.set(agentId, t);
 }
 
+function activeCount(): number {
+  let n = 0;
+  for (const s of sessions.values()) {
+    if (!TERMINAL_KINDS.has(s.state.kind)) n++;
+  }
+  return n;
+}
+
 export function registerSession(session: ProcessSession): void {
-  if (sessions.size >= MAX_SESSIONS) {
+  if (activeCount() >= MAX_SESSIONS) {
     throw new Error(`Session limit reached (${MAX_SESSIONS} active sessions)`);
   }
   sessions.set(session.agentId, session);

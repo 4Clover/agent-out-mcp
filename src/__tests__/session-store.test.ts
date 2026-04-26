@@ -116,11 +116,37 @@ describe("session-store max sessions", () => {
     for (const s of listSessions()) deleteSession(s.agentId);
   });
 
-  it("throws when registering beyond the max session limit", () => {
+  it("throws when registering beyond the max active session limit", () => {
     for (let i = 0; i < 50; i++) {
       registerSession(makeSession(`max-${i}`));
     }
     expect(() => registerSession(makeSession("max-overflow"))).toThrow(/limit/i);
+  });
+
+  it("does not count terminal sessions toward the limit", () => {
+    vi.useFakeTimers();
+    try {
+      for (let i = 0; i < 50; i++) {
+        const child = fakeChild();
+        const s = createProcessSession({
+          agentId: `term-${i}`,
+          agent: "claude",
+          task: "t",
+          command: "x",
+          args: [],
+          env: {},
+          timeoutMs: 60_000,
+          spawnImpl: ((_c: string, _a: string[], _o: unknown) => child) as unknown as typeof import("node:child_process").spawn,
+        });
+        child.stdout.end();
+        child.stderr.end();
+        child.emit("close", 0, null);
+        registerSession(s);
+      }
+      expect(() => registerSession(makeSession("active-ok"))).not.toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
