@@ -1,6 +1,12 @@
+import path from "node:path";
 import { z } from "zod";
 
-const spawnOptionsSchema = z.object({
+const absolutePath = z.string().refine(
+  (v) => path.posix.isAbsolute(v) || path.win32.isAbsolute(v),
+  { message: "cwd must be an absolute path", path: ["cwd"] }
+);
+
+export const spawnOptionsSchema = z.object({
   agent: z
     .string()
     .describe("Agent name: 'claude', 'codex', 'gemini', 'aider', or a custom name from config"),
@@ -21,8 +27,37 @@ const spawnOptionsSchema = z.object({
     .number()
     .optional()
     .describe("Timeout in milliseconds (default: 3600000 = 1 hour)"),
-  cwd: z.string().optional().describe("Working directory for the subprocess"),
+  cwd: absolutePath.optional().describe("Absolute working directory for the subprocess"),
 });
 
 export type SpawnOptions = z.infer<typeof spawnOptionsSchema>;
 export const spawnAgentSchema = spawnOptionsSchema.shape;
+
+export const flagMapSchema = z
+  .object({
+    model: z.string().optional(),
+    thinking: z.string().optional(),
+  })
+  .strict();
+
+export const agentConfigSchema = z.object({
+  command: z.string().min(1),
+  args: z.array(z.string()).default([]),
+  promptFlag: z.string().nullable().default(null),
+  flagMap: flagMapSchema.default({}),
+  env: z
+    .union([z.literal("passthrough"), z.array(z.string())])
+    .optional(),
+});
+export type AgentConfigSchema = z.infer<typeof agentConfigSchema>;
+
+export const userConfigSchema = z.object({
+  agents: z.record(z.string(), agentConfigSchema).optional(),
+});
+export type UserConfig = z.infer<typeof userConfigSchema>;
+
+export const spawnAgentsBatchSchema = z
+  .array(spawnOptionsSchema)
+  .min(1)
+  .max(10);
+export type SpawnAgentsBatchInput = z.infer<typeof spawnAgentsBatchSchema>;

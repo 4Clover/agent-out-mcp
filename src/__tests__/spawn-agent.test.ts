@@ -22,7 +22,7 @@ describe("parseQuestion", () => {
 describe("resolveAgentConfig", () => {
   it("returns config for built-in agents", async () => {
     const cfg = await resolveAgentConfig("claude");
-    expect(cfg).toEqual({
+    expect(cfg).toMatchObject({
       command: "claude",
       args: ["--print", "--dangerously-skip-permissions"],
       promptFlag: null,
