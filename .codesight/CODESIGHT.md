@@ -2,9 +2,9 @@
 
 > **Stack:** raw-http | none | unknown | typescript
 
-> 0 routes | 0 models | 0 components | 4 lib files | 1 env vars | 0 middleware | 15 events | 0% test coverage
-> **Token savings:** this file is ~1,000 tokens. Without it, AI exploration would cost ~7,300 tokens. **Saves ~6,400 tokens per conversation.**
-> **Last scanned:** 2026-04-26 19:23 — re-run after significant changes
+> 0 routes | 0 models | 0 components | 4 lib files | 1 env vars | 0 middleware | 18 events | 0% test coverage
+> **Token savings:** this file is ~1,000 tokens. Without it, AI exploration would cost ~7,900 tokens. **Saves ~6,900 tokens per conversation.**
+> **Last scanned:** 2026-04-26 20:11 — re-run after significant changes
 
 ---
 
@@ -54,7 +54,7 @@
 
 ## Most Imported Files (change these carefully)
 
-- `src/spawn-agent.ts` — imported by **6** files
+- `src/spawn-agent.ts` — imported by **7** files
 - `src/process-session.ts` — imported by **4** files
 - `src/session-store.ts` — imported by **3** files
 - `src/schemas.ts` — imported by **3** files
@@ -63,7 +63,7 @@
 
 ## Import Map (who imports what)
 
-- `src/spawn-agent.ts` ← `src/__tests__/config-loading.test.ts`, `src/__tests__/config-loading.test.ts`, `src/__tests__/config-loading.test.ts`, `src/__tests__/config-loading.test.ts`, `src/__tests__/spawn-agent.test.ts` +1 more
+- `src/spawn-agent.ts` ← `src/__tests__/config-loading.test.ts`, `src/__tests__/config-loading.test.ts`, `src/__tests__/config-loading.test.ts`, `src/__tests__/config-loading.test.ts`, `src/__tests__/config-loading.test.ts` +2 more
 - `src/process-session.ts` ← `src/__tests__/session-store.test.ts`, `src/index.ts`, `src/session-store.ts`, `src/spawn-agent.ts`
 - `src/session-store.ts` ← `src/__tests__/server.test.ts`, `src/index.ts`, `src/spawn-agent.ts`
 - `src/schemas.ts` ← `src/agents.ts`, `src/index.ts`, `src/spawn-agent.ts`
@@ -87,6 +87,9 @@
 - `b` [event] — `src/__tests__/session-store.test.ts`
 - `del-me` [event] — `src/__tests__/session-store.test.ts`
 - `ghost` [event] — `src/__tests__/session-store.test.ts`
+- `term-1` [event] — `src/__tests__/session-store.test.ts`
+- `max-${i}` [event] — `src/__tests__/session-store.test.ts`
+- `max-overflow` [event] — `src/__tests__/session-store.test.ts`
 - `output` [event] — `src/process-session.ts`
 - `line` [event] — `src/process-session.ts`
 

@@ -13,5 +13,8 @@
 - `b` [event] — `src/__tests__/session-store.test.ts`
 - `del-me` [event] — `src/__tests__/session-store.test.ts`
 - `ghost` [event] — `src/__tests__/session-store.test.ts`
+- `term-1` [event] — `src/__tests__/session-store.test.ts`
+- `max-${i}` [event] — `src/__tests__/session-store.test.ts`
+- `max-overflow` [event] — `src/__tests__/session-store.test.ts`
 - `output` [event] — `src/process-session.ts`
 - `line` [event] — `src/process-session.ts`

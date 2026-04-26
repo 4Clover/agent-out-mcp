@@ -761,6 +761,39 @@ describe("MCP server tools", () => {
     });
   });
 
+  describe("kill_agent timeout (HIGH-1 fix)", () => {
+    it("kill_agent returns within timeout even if child ignores SIGTERM", async () => {
+      vi.useFakeTimers();
+      try {
+        const ctrl = createInteractive();
+        // Override kill to NOT close the process (simulates ignoring SIGTERM)
+        ctrl.proc.kill = vi.fn(() => true);
+        vi.mocked(spawn).mockImplementationOnce(() => {
+          queueMicrotask(() => ctrl.sendQuestion("?"));
+          return ctrl.proc as unknown as child_process.ChildProcess;
+        });
+        const spawnRes = await client.callTool({
+          name: "spawn_agent",
+          arguments: { agent: "claude", task: "stubborn" },
+        });
+        const { agentId } = parseResult(spawnRes as any);
+
+        const killPromise = client.callTool({
+          name: "kill_agent",
+          arguments: { agentId },
+        });
+        // Advance past the kill timeout
+        await vi.advanceTimersByTimeAsync(35_000);
+        const result = await killPromise;
+        const data = parseResult(result as any);
+        // Should have returned (not hung) — either killed or timeout-based response
+        expect(data.agentId).toBe(agentId);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe("Step 6: spawn_agents batch limits + waitingAgents", () => {
     it("rejects empty batch (zero agents)", async () => {
       const result = await client.callTool({

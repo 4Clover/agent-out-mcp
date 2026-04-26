@@ -132,6 +132,145 @@ describe("userConfigSchema", () => {
   });
 });
 
+describe("spawnOptionsSchema model validation", () => {
+  it("accepts a valid model identifier", () => {
+    const r = spawnOptionsSchema.safeParse({
+      agent: "claude",
+      task: "hi",
+      model: "claude-sonnet-4-6",
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("accepts model with slashes and colons (registry format)", () => {
+    const r = spawnOptionsSchema.safeParse({
+      agent: "claude",
+      task: "hi",
+      model: "anthropic/claude-sonnet-4-6:latest",
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("rejects model starting with -- (flag injection)", () => {
+    const r = spawnOptionsSchema.safeParse({
+      agent: "claude",
+      task: "hi",
+      model: "--dangerously-skip-permissions",
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects model with shell metacharacters", () => {
+    for (const bad of ["model; rm -rf /", "model && evil", "$(whoami)", "model|cat"]) {
+      const r = spawnOptionsSchema.safeParse({
+        agent: "claude",
+        task: "hi",
+        model: bad,
+      });
+      expect(r.success).toBe(false);
+    }
+  });
+
+  it("rejects model longer than 128 characters", () => {
+    const r = spawnOptionsSchema.safeParse({
+      agent: "claude",
+      task: "hi",
+      model: "a".repeat(129),
+    });
+    expect(r.success).toBe(false);
+  });
+});
+
+describe("spawnOptionsSchema timeoutMs validation", () => {
+  it("accepts a valid timeout", () => {
+    const r = spawnOptionsSchema.safeParse({
+      agent: "claude",
+      task: "hi",
+      timeoutMs: 60_000,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("rejects timeoutMs of 0", () => {
+    const r = spawnOptionsSchema.safeParse({
+      agent: "claude",
+      task: "hi",
+      timeoutMs: 0,
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects negative timeoutMs", () => {
+    const r = spawnOptionsSchema.safeParse({
+      agent: "claude",
+      task: "hi",
+      timeoutMs: -1,
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects non-integer timeoutMs", () => {
+    const r = spawnOptionsSchema.safeParse({
+      agent: "claude",
+      task: "hi",
+      timeoutMs: 1500.5,
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects timeoutMs exceeding 24 hours", () => {
+    const r = spawnOptionsSchema.safeParse({
+      agent: "claude",
+      task: "hi",
+      timeoutMs: 86_400_001,
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("accepts minimum 1000ms and maximum 24h", () => {
+    expect(
+      spawnOptionsSchema.safeParse({ agent: "claude", task: "hi", timeoutMs: 1000 }).success
+    ).toBe(true);
+    expect(
+      spawnOptionsSchema.safeParse({ agent: "claude", task: "hi", timeoutMs: 86_400_000 }).success
+    ).toBe(true);
+  });
+});
+
+describe("agentConfigSchema env entry validation", () => {
+  it("rejects env entries containing = (key injection)", () => {
+    const r = agentConfigSchema.safeParse({
+      command: "x",
+      env: ["PATH=injected:/bin"],
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects env entries with empty string", () => {
+    const r = agentConfigSchema.safeParse({
+      command: "x",
+      env: [""],
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects env entries starting with a digit", () => {
+    const r = agentConfigSchema.safeParse({
+      command: "x",
+      env: ["1INVALID"],
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("accepts valid env var names", () => {
+    const r = agentConfigSchema.safeParse({
+      command: "x",
+      env: ["MY_VAR", "ANOTHER_VAR_123", "_UNDERSCORE"],
+    });
+    expect(r.success).toBe(true);
+  });
+});
+
 describe("spawnAgentsBatchSchema", () => {
   const valid = { agent: "claude", task: "hi" };
 

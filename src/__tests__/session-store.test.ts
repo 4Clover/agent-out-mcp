@@ -74,6 +74,56 @@ describe("session-store", () => {
   });
 });
 
+describe("session-store already-terminal-on-register", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    for (const s of listSessions()) deleteSession(s.agentId);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("schedules eviction immediately when session is already terminal at register time", async () => {
+    const child = fakeChild();
+    const session = createProcessSession({
+      agentId: "term-1",
+      agent: "claude",
+      task: "t",
+      command: "x",
+      args: [],
+      env: {},
+      timeoutMs: 60_000,
+      spawnImpl: ((_c: string, _a: string[], _o: unknown) => child) as unknown as typeof import("node:child_process").spawn,
+    });
+    // Close the child before registering
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", 0, null);
+    await Promise.resolve();
+    expect(session.state.kind).toBe("done");
+
+    registerSession(session);
+    expect(getSession("term-1")).toBeDefined();
+
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1000);
+    expect(getSession("term-1")).toBeUndefined();
+  });
+});
+
+describe("session-store max sessions", () => {
+  beforeEach(() => {
+    for (const s of listSessions()) deleteSession(s.agentId);
+  });
+
+  it("throws when registering beyond the max session limit", () => {
+    for (let i = 0; i < 50; i++) {
+      registerSession(makeSession(`max-${i}`));
+    }
+    expect(() => registerSession(makeSession("max-overflow"))).toThrow(/limit/i);
+  });
+});
+
 describe("session-store TTL (Step 6)", () => {
   beforeEach(() => {
     vi.useFakeTimers();

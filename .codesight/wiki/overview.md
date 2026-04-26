@@ -12,7 +12,7 @@
 
 Changes to these files have the widest blast radius across the codebase:
 
-- `src/spawn-agent.ts` — imported by **6** files
+- `src/spawn-agent.ts` — imported by **7** files
 - `src/process-session.ts` — imported by **4** files
 - `src/session-store.ts` — imported by **3** files
 - `src/schemas.ts` — imported by **3** files

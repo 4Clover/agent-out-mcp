@@ -357,6 +357,46 @@ describe("ProcessSession - terminal-state guarantees", () => {
   });
 });
 
+describe("ProcessSession - kill() ordering", () => {
+  it("sets terminationReason before sending the signal", async () => {
+    const child = makeFakeChild();
+    let stateAtKillTime: SessionState | null = null;
+    child.kill = (_signal?: NodeJS.Signals | number) => {
+      stateAtKillTime = session.state;
+      child.killed = true;
+      return true;
+    };
+    const session = createProcessSession({
+      ...baseOpts,
+      spawnImpl: makeSpawnImpl(child),
+    });
+    session.kill("SIGTERM");
+    expect(stateAtKillTime).not.toBeNull();
+    expect(stateAtKillTime!.kind).toBe("killing");
+  });
+});
+
+describe("ProcessSession - currentRun cap", () => {
+  it("caps currentRun to maxOutputBytes so it does not grow unboundedly", async () => {
+    const child = makeFakeChild();
+    const maxBytes = 200;
+    const session = createProcessSession({
+      ...baseOpts,
+      maxOutputBytes: maxBytes,
+      spawnImpl: makeSpawnImpl(child),
+    });
+    const p = session.waitNext();
+    // Write 500 bytes of output, then a question
+    child.stdout.write("x".repeat(500));
+    child.stdout.write("\n[QUESTION] q\n");
+    const r = await p;
+    expect(r.kind).toBe("question");
+    if (r.kind === "question") {
+      expect(Buffer.byteLength(r.output)).toBeLessThanOrEqual(maxBytes + 100);
+    }
+  });
+});
+
 describe("ProcessSession - TERMINAL_KINDS exported", () => {
   it("exports the terminal-kind set", () => {
     expect(TERMINAL_KINDS.has("done")).toBe(true);

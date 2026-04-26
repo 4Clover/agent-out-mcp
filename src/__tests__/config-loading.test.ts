@@ -152,6 +152,29 @@ describe("env sandbox (Step 6)", () => {
     expect(env.OTHER).toBeUndefined();
   });
 
+  it("default allowlist includes common LC_* locale vars", async () => {
+    const { resolveEnv } = await import("../spawn-agent.js");
+    const base = {
+      PATH: "/usr/bin",
+      LC_ALL: "en_US.UTF-8",
+      LC_CTYPE: "en_US.UTF-8",
+      LC_MESSAGES: "en_US.UTF-8",
+      LC_NUMERIC: "en_US.UTF-8",
+      LC_TIME: "en_US.UTF-8",
+      LC_COLLATE: "en_US.UTF-8",
+      LC_MONETARY: "en_US.UTF-8",
+      SECRET: "leaked",
+    };
+    const env = resolveEnv({ command: "x", args: [], promptFlag: null, flagMap: {} }, base);
+    expect(env.LC_ALL).toBe("en_US.UTF-8");
+    expect(env.LC_MESSAGES).toBe("en_US.UTF-8");
+    expect(env.LC_NUMERIC).toBe("en_US.UTF-8");
+    expect(env.LC_TIME).toBe("en_US.UTF-8");
+    expect(env.LC_COLLATE).toBe("en_US.UTF-8");
+    expect(env.LC_MONETARY).toBe("en_US.UTF-8");
+    expect(env.SECRET).toBeUndefined();
+  });
+
   it("PATH is always present even when extras allowlist is empty", async () => {
     const { resolveEnv } = await import("../spawn-agent.js");
     const env = resolveEnv(
