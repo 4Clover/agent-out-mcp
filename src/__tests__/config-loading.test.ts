@@ -112,3 +112,52 @@ describe("listAvailableAgents - cross-platform via which package", () => {
     expect(available).toContain("codex");
   });
 });
+
+describe("env sandbox (Step 6)", () => {
+  it("default allowlist filters out non-allowlisted env vars but keeps PATH", async () => {
+    const { resolveEnv } = await import("../spawn-agent.js");
+    const base = {
+      PATH: "/usr/bin",
+      HOME: "/home/user",
+      SECRET_VAR: "leaked",
+      DATABASE_URL: "postgres://...",
+    };
+    const env = resolveEnv({ command: "x", args: [], promptFlag: null, flagMap: {} }, base);
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.HOME).toBe("/home/user");
+    expect(env.SECRET_VAR).toBeUndefined();
+    expect(env.DATABASE_URL).toBeUndefined();
+  });
+
+  it("env: 'passthrough' includes all base env vars", async () => {
+    const { resolveEnv } = await import("../spawn-agent.js");
+    const base = { PATH: "/usr/bin", SECRET_VAR: "shh" };
+    const env = resolveEnv(
+      { command: "x", args: [], promptFlag: null, flagMap: {}, env: "passthrough" },
+      base
+    );
+    expect(env.SECRET_VAR).toBe("shh");
+    expect(env.PATH).toBe("/usr/bin");
+  });
+
+  it("env: ['EXTRA_VAR'] adds the named var to the allowlist", async () => {
+    const { resolveEnv } = await import("../spawn-agent.js");
+    const base = { PATH: "/usr/bin", EXTRA_VAR: "yes", OTHER: "no" };
+    const env = resolveEnv(
+      { command: "x", args: [], promptFlag: null, flagMap: {}, env: ["EXTRA_VAR"] },
+      base
+    );
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.EXTRA_VAR).toBe("yes");
+    expect(env.OTHER).toBeUndefined();
+  });
+
+  it("PATH is always present even when extras allowlist is empty", async () => {
+    const { resolveEnv } = await import("../spawn-agent.js");
+    const env = resolveEnv(
+      { command: "x", args: [], promptFlag: null, flagMap: {}, env: [] },
+      { PATH: "/usr/bin" }
+    );
+    expect(env.PATH).toBe("/usr/bin");
+  });
+});

@@ -509,7 +509,10 @@ describe("MCP server tools", () => {
       expect(session).toHaveProperty("agent", "claude");
       expect(session).toHaveProperty("status", "waiting_for_reply");
       expect(session).toHaveProperty("startedAt");
-      expect(session).toHaveProperty("outputLines");
+      expect(session).toHaveProperty("outputChunks");
+      expect(session).toHaveProperty("outputBytes");
+      expect(session).toHaveProperty("truncated");
+      expect(session).not.toHaveProperty("outputLines");
       expect(session.task).toContain("status test task");
     });
 
@@ -755,6 +758,75 @@ describe("MCP server tools", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe("Step 6: spawn_agents batch limits + waitingAgents", () => {
+    it("rejects empty batch (zero agents)", async () => {
+      const result = await client.callTool({
+        name: "spawn_agents",
+        arguments: { agents: [] },
+      });
+      expect(result.isError).toBe(true);
+      expect((result.content[0] as any).text).toMatch(/invalid|at least|min/i);
+    });
+
+    it("rejects batch larger than 10 with a max-count message", async () => {
+      const agents = Array(11).fill({ agent: "claude", task: "x" });
+      const result = await client.callTool({
+        name: "spawn_agents",
+        arguments: { agents },
+      });
+      expect(result.isError).toBe(true);
+      expect((result.content[0] as any).text).toMatch(/10|max/i);
+    });
+
+    it("response includes waitingAgents array listing only the paused agentIds", async () => {
+      let n = 0;
+      vi.mocked(spawn).mockImplementation(() => {
+        n++;
+        if (n === 1) {
+          return createFakeProcess({ stdout: "ok\n", exitCode: 0 }) as unknown as child_process.ChildProcess;
+        }
+        return createFakeProcess({ question: "?" }) as unknown as child_process.ChildProcess;
+      });
+      const result = await client.callTool({
+        name: "spawn_agents",
+        arguments: {
+          agents: [
+            { agent: "claude", task: "fast" },
+            { agent: "claude", task: "pause" },
+            { agent: "claude", task: "pause2" },
+          ],
+        },
+      });
+      const data = parseResult(result as any);
+      expect(Array.isArray(data.waitingAgents)).toBe(true);
+      expect(data.waitingAgents).toHaveLength(2);
+      for (const id of data.waitingAgents) {
+        expect(id).toMatch(/^claude-[0-9a-f]{16}$/);
+      }
+    });
+  });
+
+  describe("Step 6: get_status output reporting", () => {
+    it("reports outputBytes for accumulated output", async () => {
+      vi.mocked(spawn).mockImplementationOnce(() =>
+        createFakeProcess({ question: "?" }) as unknown as child_process.ChildProcess
+      );
+      await client.callTool({
+        name: "spawn_agent",
+        arguments: { agent: "claude", task: "byte test" },
+      });
+      const result = await client.callTool({
+        name: "get_status",
+        arguments: {},
+      });
+      const data = parseResult(result as any);
+      const session = data.sessions[0];
+      expect(typeof session.outputBytes).toBe("number");
+      expect(session.outputBytes).toBeGreaterThan(0);
+      expect(session.truncated).toBe(false);
     });
   });
 
