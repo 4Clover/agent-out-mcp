@@ -7,14 +7,18 @@ custom) as subprocesses with bidirectional communication. An MCP host calls
 
 ## Commands
 
-- Install: `npm install`
-- Build: `npm run build` (tsc → dist/)
-- Dev: `npm run dev` (Node 22+ required — uses `--experimental-strip-types`)
-- Start: `npm start` (runs dist/index.js)
+- Install: `just install` (or `pnpm install`)
+- Build: `just build` (tsc → dist/)
+- Typecheck: `just check` (or `npx tsc --noEmit`)
+- Test all: `just test`
+- Test single: `just test-file <name>` (e.g. `just test-file spawn-agent`)
+- Test watch: `just test-watch`
+- CI (typecheck + test): `just ci`
+- Dev: `just dev` (Node 22+ required — uses `--experimental-strip-types`)
+- Start: `just start` (builds first, then runs dist/index.js)
+- Clean: `just clean` (removes dist/)
 - Register (compiled): `claude mcp add agent-link node /absolute/path/to/dist/index.js`
 - Register (source): `claude mcp add agent-link node --experimental-strip-types /absolute/path/to/src/index.ts`
-
-No test suite, linter, or formatter is configured. Typecheck with `npx tsc --noEmit`.
 
 ## Architecture
 
@@ -58,6 +62,14 @@ and can override defaults. Override the config path with the
 - All imports use `.js` extensions (required for ESM + tsc).
 - `strict: true` in tsconfig.
 
+## Testing
+
+- Framework: vitest (config in `vitest.config.ts`)
+- Tests live in `src/__tests__/` and are excluded from the tsc build.
+- Three test files: `server.test.ts`, `session-store.test.ts`, `spawn-agent.test.ts`.
+- Zod schemas and the `SpawnOptions` type live in `schemas.ts` — update
+  there, not in index.ts or spawn-agent.ts.
+
 ## Constraints
 
 - The built-in agent configs use permissive flags on purpose (claude:
@@ -76,8 +88,8 @@ and can override defaults. Override the config path with the
 
 ## Gotchas
 
-- Dev mode (`npm run dev`) requires Node 22+ for `--experimental-strip-types`.
-  The build (`npm run build`) works on any Node that supports ES2022.
+- Dev mode (`just dev`) requires Node 22+ for `--experimental-strip-types`.
+  The build (`just build`) works on any Node that supports ES2022.
 - `isCommandAvailable` in spawn-agent.ts spawns and immediately kills a
   process to check PATH availability — it is not a reliable check for all CLIs.
 - The `[QUESTION]` detection splits on `[QUESTION]` anywhere in a stdout

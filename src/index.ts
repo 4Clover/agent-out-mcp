@@ -2,6 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { spawnAgentSchema } from "./schemas.js";
 import { spawnAgent, listAvailableAgents, parseQuestion } from "./spawn-agent.js";
 import { getSession, listSessions, deleteSession } from "./session-store.js";
 
@@ -18,30 +19,6 @@ export function createServer(): McpServer {
 function textResult(data: unknown, isError = false) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }], isError };
 }
-
-const spawnAgentSchema = {
-  agent: z
-    .string()
-    .describe("Agent name: 'claude', 'codex', 'gemini', 'aider', or a custom name from config"),
-  task: z.string().describe("The task or prompt to give the agent"),
-  context: z
-    .object({
-      files: z.array(z.string()).optional().describe("File paths to include in context"),
-      error: z.string().optional().describe("Error message or stack trace for debugging tasks"),
-      intent: z.string().optional().describe("High-level intent hint for the agent"),
-    })
-    .optional(),
-  model: z.string().optional().describe("Override the agent's default model"),
-  thinking: z
-    .enum(["low", "medium", "high", "max"])
-    .optional()
-    .describe("Thinking intensity (supported by claude)"),
-  timeoutMs: z
-    .number()
-    .optional()
-    .describe("Timeout in milliseconds (default: 3600000 = 1 hour)"),
-  cwd: z.string().optional().describe("Working directory for the subprocess"),
-};
 
 function registerTools(server: McpServer): void {
 

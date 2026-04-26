@@ -5,7 +5,7 @@ See @AGENTS.md for project context, commands, architecture, and constraints.
 ## Claude-specific
 
 - No `.claude/` directory, hooks, or slash commands are configured.
-- No test suite — verify changes by building (`npm run build`) and checking
-  for type errors (`npx tsc --noEmit`).
-- When modifying tool schemas in index.ts, keep the zod schemas and the
-  `SpawnOptions` interface in spawn-agent.ts in sync.
+- Verify changes by building (`just build`) and running tests (`just test`).
+  Typecheck separately with `just check`.
+- Zod schemas and the `SpawnOptions` type live in `schemas.ts` — update
+  there, not in index.ts or spawn-agent.ts.

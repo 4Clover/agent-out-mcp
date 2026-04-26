@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { AgentConfig, DEFAULT_AGENTS } from "./agents.js";
+import { SpawnOptions } from "./schemas.js";
 import { createSession } from "./session-store.js";
 
 export function parseQuestion(text: string): string {
@@ -57,20 +58,6 @@ function isCommandAvailable(cmd: string): boolean {
 }
 
 // ── Spawn ─────────────────────────────────────────────────────────────────────
-
-export interface SpawnOptions {
-  agent: string;
-  task: string;
-  context?: {
-    files?: string[];
-    error?: string;
-    intent?: string;
-  };
-  model?: string;
-  thinking?: "low" | "medium" | "high" | "max";
-  timeoutMs?: number;
-  cwd?: string;
-}
 
 export interface SpawnResult {
   agentId: string;
@@ -147,7 +134,8 @@ function runProcess(
 
     const timeoutMs = opts.timeoutMs ?? 3_600_000; // 1 hour default
     let resolved = false;
-    let outputBuffer = "";
+
+    const collectOutput = () => session.output.join("").trim();
 
     const timeout = setTimeout(() => {
       if (!resolved) {
@@ -159,7 +147,6 @@ function runProcess(
 
     proc.stdout.on("data", (chunk: Buffer) => {
       const text = chunk.toString();
-      outputBuffer += text;
       session.output.push(text);
 
       if (text.includes("[QUESTION]")) {
@@ -186,13 +173,13 @@ function runProcess(
       if (!resolved) {
         resolved = true;
         if (code === 0) {
-          resolve({ agentId, status: "done", result: outputBuffer.trim() });
+          resolve({ agentId, status: "done", result: collectOutput() });
         } else {
           resolve({
             agentId,
             status: "error",
             error: `Agent exited with code ${code}`,
-            result: outputBuffer.trim(),
+            result: collectOutput(),
           });
         }
       }
