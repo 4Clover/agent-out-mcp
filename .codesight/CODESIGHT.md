@@ -2,9 +2,9 @@
 
 > **Stack:** raw-http | none | unknown | typescript
 
-> 0 routes | 0 models | 0 components | 4 lib files | 1 env vars | 0 middleware | 4 events | 0% test coverage
-> **Token savings:** this file is ~700 tokens. Without it, AI exploration would cost ~4,800 tokens. **Saves ~4,100 tokens per conversation.**
-> **Last scanned:** 2026-04-26 19:07 — re-run after significant changes
+> 0 routes | 0 models | 0 components | 4 lib files | 1 env vars | 0 middleware | 10 events | 0% test coverage
+> **Token savings:** this file is ~800 tokens. Without it, AI exploration would cost ~6,200 tokens. **Saves ~5,300 tokens per conversation.**
+> **Last scanned:** 2026-04-26 19:10 — re-run after significant changes
 
 ---
 
@@ -58,6 +58,7 @@
 - `src/schemas.ts` — imported by **3** files
 - `src/spawn-agent.ts` — imported by **2** files
 - `src/index.ts` — imported by **1** files
+- `src/process-session.ts` — imported by **1** files
 - `src/agents.ts` — imported by **1** files
 
 ## Import Map (who imports what)
@@ -66,6 +67,7 @@
 - `src/schemas.ts` ← `src/agents.ts`, `src/index.ts`, `src/spawn-agent.ts`
 - `src/spawn-agent.ts` ← `src/__tests__/spawn-agent.test.ts`, `src/index.ts`
 - `src/index.ts` ← `src/__tests__/server.test.ts`
+- `src/process-session.ts` ← `src/__tests__/session-store.test.ts`
 - `src/agents.ts` ← `src/spawn-agent.ts`
 
 ---
@@ -74,6 +76,12 @@
 
 - `exit` [event] — `src/__tests__/process-session.test.ts`
 - `question` [event] — `src/__tests__/process-session.test.ts`
+- `test-1` [event] — `src/__tests__/session-store.test.ts`
+- `nonexistent` [event] — `src/__tests__/session-store.test.ts`
+- `a` [event] — `src/__tests__/session-store.test.ts`
+- `b` [event] — `src/__tests__/session-store.test.ts`
+- `del-me` [event] — `src/__tests__/session-store.test.ts`
+- `ghost` [event] — `src/__tests__/session-store.test.ts`
 - `output` [event] — `src/process-session.ts`
 - `line` [event] — `src/process-session.ts`
 

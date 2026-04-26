@@ -5,22 +5,25 @@ import { createServer } from "../index.js";
 import { listSessions, deleteSession } from "../session-store.js";
 import * as child_process from "node:child_process";
 import { EventEmitter } from "node:events";
-import { Writable } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 
 // ── Mock child_process to prevent spawning real CLIs ─────────────────────────
 
-function createFakeProcess(opts?: {
+interface FakeProcOpts {
   stdout?: string;
   exitCode?: number;
   question?: string;
   emitError?: Error;
-}) {
-  const stdout = new EventEmitter();
-  const stderr = new EventEmitter();
+  splitQuestion?: boolean;
+}
+
+function createFakeProcess(opts?: FakeProcOpts) {
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
   const proc = new EventEmitter() as EventEmitter & {
     stdin: Writable;
-    stdout: EventEmitter;
-    stderr: EventEmitter;
+    stdout: PassThrough;
+    stderr: PassThrough;
     pid: number;
     kill: ReturnType<typeof vi.fn>;
   };
@@ -30,7 +33,11 @@ function createFakeProcess(opts?: {
   proc.stderr = stderr;
   proc.pid = 9999;
   proc.kill = vi.fn(() => {
-    proc.emit("close", null);
+    queueMicrotask(() => {
+      stdout.end();
+      stderr.end();
+      proc.emit("close", null, "SIGTERM");
+    });
     return true;
   });
 
@@ -40,12 +47,28 @@ function createFakeProcess(opts?: {
       return;
     }
     if (opts?.question) {
-      stdout.emit("data", Buffer.from(`[QUESTION] ${opts.question}\n`));
+      if (opts.splitQuestion) {
+        // Split [QUESTION] across two chunks to exercise the cross-chunk parser
+        stdout.write("[QUESTI");
+        queueMicrotask(() => {
+          stdout.write(`ON] ${opts.question}\n`);
+        });
+      } else {
+        stdout.write(`[QUESTION] ${opts.question}\n`);
+      }
     } else if (opts?.stdout !== undefined) {
-      stdout.emit("data", Buffer.from(opts.stdout));
-      queueMicrotask(() => proc.emit("close", opts?.exitCode ?? 0));
+      stdout.write(opts.stdout);
+      queueMicrotask(() => {
+        stdout.end();
+        stderr.end();
+        proc.emit("close", opts?.exitCode ?? 0, null);
+      });
     } else {
-      queueMicrotask(() => proc.emit("close", opts?.exitCode ?? 0));
+      queueMicrotask(() => {
+        stdout.end();
+        stderr.end();
+        proc.emit("close", opts?.exitCode ?? 0, null);
+      });
     }
   });
 
@@ -93,7 +116,7 @@ describe("MCP server tools", () => {
 
   afterAll(async () => {
     for (const s of listSessions()) {
-      try { s.process.kill(); } catch {}
+      try { s.kill(); } catch { /* best-effort cleanup */ }
       deleteSession(s.agentId);
     }
     await serverCleanup();
@@ -102,11 +125,9 @@ describe("MCP server tools", () => {
   beforeEach(() => {
     for (const s of listSessions()) deleteSession(s.agentId);
     vi.mocked(spawn).mockImplementation(() =>
-      createFakeProcess({ stdout: "mock output\n", exitCode: 0 }) as any
+      createFakeProcess({ stdout: "mock output\n", exitCode: 0 }) as unknown as child_process.ChildProcess
     );
   });
-
-  // ── Tool listing ─────────────────────────────────────────────────────────
 
   describe("tool listing", () => {
     it("registers exactly 6 tools", async () => {
@@ -137,8 +158,6 @@ describe("MCP server tools", () => {
     });
   });
 
-  // ── spawn_agent ──────────────────────────────────────────────────────────
-
   describe("spawn_agent", () => {
     it("spawns an agent and returns done status", async () => {
       const result = await client.callTool({
@@ -147,8 +166,17 @@ describe("MCP server tools", () => {
       });
       const data = parseResult(result as any);
       expect(data.status).toBe("done");
-      expect(data.agentId).toMatch(/^claude-/);
+      expect(data.agentId).toMatch(/^claude-[0-9a-f]{16}$/);
       expect(data.result).toBe("mock output");
+    });
+
+    it("uses lowercased agent name in agentId even when input is uppercase", async () => {
+      const result = await client.callTool({
+        name: "spawn_agent",
+        arguments: { agent: "Claude", task: "hi" },
+      });
+      const data = parseResult(result as any);
+      expect(data.agentId).toMatch(/^claude-[0-9a-f]{16}$/);
     });
 
     it("returns error for unknown agent", async () => {
@@ -164,7 +192,7 @@ describe("MCP server tools", () => {
 
     it("returns error when process exits non-zero", async () => {
       vi.mocked(spawn).mockImplementation(() =>
-        createFakeProcess({ exitCode: 1 }) as any
+        createFakeProcess({ exitCode: 1 }) as unknown as child_process.ChildProcess
       );
       const result = await client.callTool({
         name: "spawn_agent",
@@ -177,7 +205,7 @@ describe("MCP server tools", () => {
 
     it("returns waiting_for_reply when process asks a question", async () => {
       vi.mocked(spawn).mockImplementation(() =>
-        createFakeProcess({ question: "What file should I edit?" }) as any
+        createFakeProcess({ question: "What file should I edit?" }) as unknown as child_process.ChildProcess
       );
       const result = await client.callTool({
         name: "spawn_agent",
@@ -188,9 +216,22 @@ describe("MCP server tools", () => {
       expect(data.question).toBe("What file should I edit?");
     });
 
+    it("detects [QUESTION] split across stdout chunks", async () => {
+      vi.mocked(spawn).mockImplementation(() =>
+        createFakeProcess({ question: "Cross-chunk question?", splitQuestion: true }) as unknown as child_process.ChildProcess
+      );
+      const result = await client.callTool({
+        name: "spawn_agent",
+        arguments: { agent: "claude", task: "split test" },
+      });
+      const data = parseResult(result as any);
+      expect(data.status).toBe("waiting_for_reply");
+      expect(data.question).toBe("Cross-chunk question?");
+    });
+
     it("returns error when spawn itself fails", async () => {
       vi.mocked(spawn).mockImplementation(() =>
-        createFakeProcess({ emitError: new Error("ENOENT") }) as any
+        createFakeProcess({ emitError: new Error("ENOENT") }) as unknown as child_process.ChildProcess
       );
       const result = await client.callTool({
         name: "spawn_agent",
@@ -201,7 +242,7 @@ describe("MCP server tools", () => {
       expect(data.error).toBe("ENOENT");
     });
 
-    it("passes optional context, model, and thinking params", async () => {
+    it("passes optional context, model, and thinking params via flagMap", async () => {
       const result = await client.callTool({
         name: "spawn_agent",
         arguments: {
@@ -224,8 +265,6 @@ describe("MCP server tools", () => {
     });
   });
 
-  // ── spawn_agents ─────────────────────────────────────────────────────────
-
   describe("spawn_agents", () => {
     it("spawns multiple agents in parallel", async () => {
       const result = await client.callTool({
@@ -247,8 +286,8 @@ describe("MCP server tools", () => {
       let callCount = 0;
       vi.mocked(spawn).mockImplementation(() => {
         callCount++;
-        if (callCount === 1) return createFakeProcess({ stdout: "ok\n", exitCode: 0 }) as any;
-        return createFakeProcess({ exitCode: 1 }) as any;
+        if (callCount === 1) return createFakeProcess({ stdout: "ok\n", exitCode: 0 }) as unknown as child_process.ChildProcess;
+        return createFakeProcess({ exitCode: 1 }) as unknown as child_process.ChildProcess;
       });
 
       const result = await client.callTool({
@@ -281,8 +320,6 @@ describe("MCP server tools", () => {
     });
   });
 
-  // ── reply ────────────────────────────────────────────────────────────────
-
   describe("reply", () => {
     it("returns error for nonexistent session", async () => {
       const result = await client.callTool({
@@ -296,7 +333,7 @@ describe("MCP server tools", () => {
 
     it("returns error when session is not waiting_for_reply", async () => {
       vi.mocked(spawn).mockImplementation(() =>
-        createFakeProcess({ stdout: "done\n", exitCode: 0 }) as any
+        createFakeProcess({ stdout: "done\n", exitCode: 0 }) as unknown as child_process.ChildProcess
       );
       const spawnResult = await client.callTool({
         name: "spawn_agent",
@@ -313,8 +350,6 @@ describe("MCP server tools", () => {
     });
   });
 
-  // ── kill_agent ───────────────────────────────────────────────────────────
-
   describe("kill_agent", () => {
     it("returns error for nonexistent session", async () => {
       const result = await client.callTool({
@@ -328,7 +363,7 @@ describe("MCP server tools", () => {
 
     it("kills a running session", async () => {
       vi.mocked(spawn).mockImplementation(() =>
-        createFakeProcess({ question: "waiting?" }) as any
+        createFakeProcess({ question: "waiting?" }) as unknown as child_process.ChildProcess
       );
       const spawnResult = await client.callTool({
         name: "spawn_agent",
@@ -347,7 +382,7 @@ describe("MCP server tools", () => {
 
     it("accepts SIGKILL signal", async () => {
       vi.mocked(spawn).mockImplementation(() =>
-        createFakeProcess({ question: "?" }) as any
+        createFakeProcess({ question: "?" }) as unknown as child_process.ChildProcess
       );
       const spawnResult = await client.callTool({
         name: "spawn_agent",
@@ -363,8 +398,6 @@ describe("MCP server tools", () => {
       expect(data.signal).toBe("SIGKILL");
     });
   });
-
-  // ── list_agents ──────────────────────────────────────────────────────────
 
   describe("list_agents", () => {
     it("returns a list of available agents", async () => {
@@ -391,8 +424,6 @@ describe("MCP server tools", () => {
     });
   });
 
-  // ── get_status ───────────────────────────────────────────────────────────
-
   describe("get_status", () => {
     it("returns empty when no sessions exist", async () => {
       const result = await client.callTool({
@@ -406,7 +437,7 @@ describe("MCP server tools", () => {
 
     it("returns active sessions with expected shape", async () => {
       vi.mocked(spawn).mockImplementation(() =>
-        createFakeProcess({ question: "??" }) as any
+        createFakeProcess({ question: "??" }) as unknown as child_process.ChildProcess
       );
       await client.callTool({
         name: "spawn_agent",
@@ -431,7 +462,7 @@ describe("MCP server tools", () => {
     it("truncates long tasks to 80 chars", async () => {
       const longTask = "x".repeat(120);
       vi.mocked(spawn).mockImplementation(() =>
-        createFakeProcess({ stdout: "ok\n", exitCode: 0 }) as any
+        createFakeProcess({ stdout: "ok\n", exitCode: 0 }) as unknown as child_process.ChildProcess
       );
       await client.callTool({
         name: "spawn_agent",
@@ -448,8 +479,6 @@ describe("MCP server tools", () => {
       }
     });
   });
-
-  // ── Schema validation (malformed requests) ───────────────────────────────
 
   describe("schema validation", () => {
     it("returns error for spawn_agent without required agent field", async () => {
@@ -497,8 +526,6 @@ describe("MCP server tools", () => {
       expect((result.content[0] as any).text).toMatch(/invalid/i);
     });
   });
-
-  // ── Response shape ───────────────────────────────────────────────────────
 
   describe("response shape", () => {
     it("all tools return content array with text type", async () => {
