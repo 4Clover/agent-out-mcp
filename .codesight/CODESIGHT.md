@@ -4,7 +4,7 @@
 
 > 0 routes | 0 models | 0 components | 3 lib files | 1 env vars | 0 middleware | 0% test coverage
 > **Token savings:** this file is ~600 tokens. Without it, AI exploration would cost ~3,500 tokens. **Saves ~3,000 tokens per conversation.**
-> **Last scanned:** 2026-04-26 19:01 — re-run after significant changes
+> **Last scanned:** 2026-04-26 19:02 — re-run after significant changes
 
 ---
 
@@ -47,16 +47,16 @@
 ## Most Imported Files (change these carefully)
 
 - `src/session-store.ts` — imported by **3** files
+- `src/schemas.ts` — imported by **3** files
 - `src/spawn-agent.ts` — imported by **2** files
-- `src/schemas.ts` — imported by **2** files
 - `src/index.ts` — imported by **1** files
 - `src/agents.ts` — imported by **1** files
 
 ## Import Map (who imports what)
 
 - `src/session-store.ts` ← `src/__tests__/server.test.ts`, `src/index.ts`, `src/spawn-agent.ts`
+- `src/schemas.ts` ← `src/agents.ts`, `src/index.ts`, `src/spawn-agent.ts`
 - `src/spawn-agent.ts` ← `src/__tests__/spawn-agent.test.ts`, `src/index.ts`
-- `src/schemas.ts` ← `src/index.ts`, `src/spawn-agent.ts`
 - `src/index.ts` ← `src/__tests__/server.test.ts`
 - `src/agents.ts` ← `src/spawn-agent.ts`
 
