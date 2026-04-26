@@ -21,7 +21,7 @@ Changes to these files have the widest blast radius across the codebase:
 
 ## Required Environment Variables
 
-- `AGENT_LINK_CONFIG` — `src/spawn-agent.ts`
+- `AGENT_LINK_CONFIG` — `src/__tests__/config-loading.test.ts`
 
 ---
 _Back to [index.md](./index.md) · Generated 2026-04-26_

@@ -3,8 +3,8 @@
 > **Stack:** raw-http | none | unknown | typescript
 
 > 0 routes | 0 models | 0 components | 4 lib files | 1 env vars | 0 middleware | 15 events | 0% test coverage
-> **Token savings:** this file is ~900 tokens. Without it, AI exploration would cost ~7,100 tokens. **Saves ~6,200 tokens per conversation.**
-> **Last scanned:** 2026-04-26 19:14 — re-run after significant changes
+> **Token savings:** this file is ~900 tokens. Without it, AI exploration would cost ~7,200 tokens. **Saves ~6,300 tokens per conversation.**
+> **Last scanned:** 2026-04-26 19:16 — re-run after significant changes
 
 ---
 
@@ -37,7 +37,7 @@
 
 ## Environment Variables
 
-- `AGENT_LINK_CONFIG` **required** — src/spawn-agent.ts
+- `AGENT_LINK_CONFIG` **required** — src/__tests__/config-loading.test.ts
 
 ## Config Files
 
@@ -94,7 +94,7 @@
 # Test Coverage
 
 > **0%** of routes and models are covered by tests
-> 5 test files found
+> 6 test files found
 
 ---
 

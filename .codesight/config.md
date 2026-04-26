@@ -2,7 +2,7 @@
 
 ## Environment Variables
 
-- `AGENT_LINK_CONFIG` **required** — src/spawn-agent.ts
+- `AGENT_LINK_CONFIG` **required** — src/__tests__/config-loading.test.ts
 
 ## Config Files
 

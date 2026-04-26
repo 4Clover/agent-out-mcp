@@ -80,11 +80,14 @@ vi.mock("node:child_process", async (importOriginal) => {
   return {
     ...original,
     spawn: vi.fn(() => createFakeProcess({ stdout: "mock output\n", exitCode: 0 })),
-    execFileSync: vi.fn(() => Buffer.from("/usr/bin/mock")),
   };
 });
 
-const { spawn, execFileSync } = vi.mocked(child_process);
+vi.mock("which", () => ({
+  default: vi.fn(async () => "/usr/bin/mock"),
+}));
+
+const { spawn } = vi.mocked(child_process);
 
 interface InteractiveCtrl {
   proc: EventEmitter & {
@@ -463,7 +466,6 @@ describe("MCP server tools", () => {
     });
 
     it("includes all defaults when all commands are on PATH", async () => {
-      vi.mocked(execFileSync).mockReturnValue(Buffer.from("/usr/bin/mock"));
       const result = await client.callTool({
         name: "list_agents",
         arguments: {},
