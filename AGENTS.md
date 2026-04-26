@@ -22,7 +22,7 @@ custom) as subprocesses with bidirectional communication. An MCP host calls
 
 ## Architecture
 
-Four source files in `src/`:
+Five source files in `src/`:
 
 - **index.ts** — MCP server entry point. Registers six tools (spawn_agent,
   spawn_agents, reply, kill_agent, list_agents, get_status) on a stdio
@@ -30,6 +30,8 @@ Four source files in `src/`:
 - **agents.ts** — `AgentConfig` type and `DEFAULT_AGENTS` map (claude, codex,
   gemini, aider). Each config specifies the CLI command, static args, and
   whether the prompt uses a flag (`promptFlag`) or positional arg.
+- **schemas.ts** — Zod schemas for tool inputs and the `SpawnOptions` type.
+  Update schemas here, not in index.ts or spawn-agent.ts.
 - **spawn-agent.ts** — Core spawning logic. Loads user overrides from
   `~/.agent-link/config.json` (or `AGENT_LINK_CONFIG` env var), merges with
   defaults, builds the prompt (injecting context fields), spawns the child
