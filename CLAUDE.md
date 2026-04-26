@@ -2,6 +2,10 @@
 
 See @AGENTS.md for project context, commands, architecture, and constraints.
 
+## Docs
+
+- @docs/adr/0001-process-session-extraction.md — rationale for ProcessSession extraction
+
 ## Claude-specific
 
 - No `.claude/` directory, hooks, or slash commands are configured.

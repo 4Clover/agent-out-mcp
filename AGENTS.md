@@ -24,61 +24,41 @@ custom) as subprocesses with bidirectional communication. An MCP host calls
 
 Six source files in `src/`:
 
-- **index.ts** — MCP server entry point. Registers seven tools (spawn_agent,
-  spawn_agents, reply, wait_agent, kill_agent, list_agents, get_status) on a
-  stdio transport using `@modelcontextprotocol/sdk`.
+- **index.ts** — MCP server entry point; registers seven tools on stdio.
 - **agents.ts** — `AgentConfig` type and `DEFAULT_AGENTS` map (claude, codex,
-  gemini, aider). Each config specifies the CLI command, static args, and
-  whether the prompt uses a flag (`promptFlag`) or positional arg, plus a
-  `flagMap` of known logical options (`model`, `thinking`) to per-CLI flag
-  names, plus an optional `env` setting.
-- **schemas.ts** — Zod schemas for tool inputs, agent config, user config,
-  and the `SpawnOptions` type. Cross-platform absolute-path validation lives
-  here. Update schemas here, not in index.ts or spawn-agent.ts.
-- **process-session.ts** — Lifecycle owner for a child process. Single
-  readline-based stdout/stderr listener, byte-capped output buffer
-  (default 8 MB, drop-oldest), discriminated-union state machine with
-  terminal-state guarantee (`done`/`error`/`killed` cannot be downgraded),
-  and a FIFO waiter queue that powers `waitNext`. Other modules go through
-  this; nothing else touches `ChildProcess` listeners directly.
-- **spawn-agent.ts** — Loads user overrides from `~/.agent-link/config.json`
-  (or `AGENT_LINK_CONFIG` env var), Zod-validates them, normalizes keys to
-  lowercase, builds the prompt and args (applying per-agent `flagMap`),
-  resolves the env (allowlist or passthrough), and creates a
-  `ProcessSession`. Surfaces config load errors to stderr.
-- **session-store.ts** — In-memory `Map<string, ProcessSession>` keyed by
-  `agentId`. Subscribes to each session's `'close'` event to schedule a
-  5-minute eviction timer (unref'd) for terminal sessions. `deleteSession`
-  cancels the pending timer.
+  gemini, aider) with per-CLI `flagMap` and env settings.
+- **schemas.ts** — Zod schemas for all tool inputs and config validation.
+  Update schemas here, not in index.ts or spawn-agent.ts.
+- **process-session.ts** — Lifecycle owner for a child process. State machine
+  with terminal-state guarantee, byte-capped output buffer (8 MB,
+  drop-oldest), and FIFO waiter queue powering `waitNext`.
+- **spawn-agent.ts** — Loads user config from `~/.agent-link/config.json`
+  (or `AGENT_LINK_CONFIG`), Zod-validates, builds args via `flagMap`,
+  resolves env, and creates a `ProcessSession`.
+- **session-store.ts** — In-memory `Map<string, ProcessSession>` with
+  5-minute eviction timer for terminal sessions.
 
 ## Bidirectional Protocol
 
-When a subprocess prints a complete line starting with `[QUESTION] <text>`
-to stdout, the session transitions to `waiting_for_reply` and the host call
-resolves with `{ status: "waiting_for_reply", question }`. The subprocess
-stays alive. The host calls `reply(agentId, message)` which writes to stdin
-and waits for the next event:
+A subprocess line starting with `[QUESTION] <text>` transitions the session
+to `waiting_for_reply`. The host calls `reply(agentId, message)` which
+writes to stdin and waits for the next event:
 
 - Next `[QUESTION]` → `{ status: "waiting_for_reply", question, partial }`.
 - Process close → `{ status: "done"|"error"|"killed", result, error? }`.
-- 30-second silence → `{ status: "running", partial }`. The session state
-  stays `running` (it does **not** revert to `waiting_for_reply`); the host
-  should call `wait_agent(agentId, timeoutMs?)` to await the next event
-  without writing duplicate input.
+- 30-second silence → `{ status: "running", partial }`. The host should
+  call `wait_agent` to await the next event without writing duplicate input.
 
-The marker is parsed line-by-line via `readline` with `crlfDelay: Infinity`,
-so cross-chunk `[QUESTI` / `ON] foo\n` markers are detected. CRLF endings
-are tolerated. Mid-line `[QUESTION]` substrings do **not** trigger.
+The marker must be exactly `[QUESTION] ` (with trailing space) at the
+**start of a line**. Mid-line substrings do not trigger.
 
-The overall spawn timeout (default 1 hour, configurable via `timeoutMs`)
-survives the first question event — a runaway child still terminates at
-the deadline. After a timeout-triggered termination, a late `'close 0'` is
-**not** treated as `done` — the terminal-state guarantee keeps it `error`.
+The spawn timeout (default 1 hour) survives question events — a runaway
+child still terminates at the deadline. After timeout-triggered kill, a
+late `'close 0'` is **not** treated as `done` (terminal-state guarantee).
 
 ## Custom Agents
 
-Users add agents in `~/.agent-link/config.json` under an `agents` key. The
-config shape matches `agentConfigSchema` from `schemas.ts`:
+Users add agents in `~/.agent-link/config.json` under an `agents` key:
 
 ```json
 {
@@ -94,40 +74,19 @@ config shape matches `agentConfigSchema` from `schemas.ts`:
 }
 ```
 
-- The config is Zod-validated. A typo (e.g. `flagMap: { modle: "..." }`)
-  surfaces as a stderr warning naming the offending key path.
-- `flagMap` keys are restricted to known logical options (`model`,
-  `thinking`).
-- `env` defaults to a small allowlist
-  (`PATH`, `HOME`, `USER`, `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`,
-  `LC_NUMERIC`, `LC_TIME`, `LC_COLLATE`, `LC_MONETARY`, `TERM`, `SHELL`);
-  `PATH` is always present even when `env: []`. Set `env: "passthrough"`
-  to inherit the full parent process env, or supply a string array of
-  valid env var names (matching `^[a-zA-Z_][a-zA-Z0-9_]*$`) to extend
-  the allowlist.
-- Keys are lowercased at load time. A user-config entry whose lowercased
-  key matches a built-in default (e.g. `"Claude"` vs built-in `claude`)
-  **overrides** the default; the original casing is not independently
-  reachable.
-
-Override the config path with the `AGENT_LINK_CONFIG` environment variable.
+- Config is Zod-validated; typos surface as stderr warnings.
+- `flagMap` keys: `model`, `thinking` only.
+- `env` defaults to a safe allowlist; `PATH` is always present. Set
+  `"passthrough"` to inherit the full parent env.
+- Keys are lowercased; a user entry matching a built-in name overrides it.
+- Override the config path with `AGENT_LINK_CONFIG` env var.
 
 ## Conventions
 
-- ESM throughout (`"type": "module"` in package.json, Node16 module resolution).
-- All imports use `.js` extensions (required for ESM + tsc).
-- `strict: true` in tsconfig.
-- `cwd` in `spawn_agent` must be an absolute path on either POSIX or Windows;
-  cross-platform validation lives in `schemas.ts`.
-- Session IDs are 16 hex characters of cryptographic randomness, prefixed
-  with the lowercased agent name (e.g. `claude-1a2b3c4d5e6f7890`).
-- Output is byte-capped at 8 MB per session and reported via
-  `outputBytes` / `outputChunks` / `truncated` on `get_status`.
-- `model` must match `^[a-zA-Z0-9_][a-zA-Z0-9_.\-:/@]*$` (max 128 chars).
-- `timeoutMs` must be an integer in `[1000, 86400000]`.
-- Maximum 50 concurrent sessions (enforced by session-store).
-- `kill_agent` waits up to 30 seconds for the child to close; does not
-  hang indefinitely if the process ignores the signal.
+- ESM throughout; all imports use `.js` extensions (required for ESM + tsc).
+- `cwd` in `spawn_agent` must be an absolute path (POSIX or Windows).
+- Output is byte-capped at 8 MB per session (drop-oldest).
+- Maximum 50 concurrent sessions enforced by session-store.
 
 ## MCP wire surfaces
 
