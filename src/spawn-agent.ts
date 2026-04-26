@@ -1,8 +1,8 @@
-import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
+import which from "which";
 import { AgentConfig, DEFAULT_AGENTS } from "./agents.js";
 import { SpawnOptions, userConfigSchema } from "./schemas.js";
 import { createProcessSession } from "./process-session.js";
@@ -18,18 +18,58 @@ interface UserConfig {
   agents?: Record<string, AgentConfig>;
 }
 
-async function loadUserConfig(): Promise<UserConfig> {
-  const configPath =
+function configPath(): string {
+  return (
     process.env.AGENT_LINK_CONFIG ??
-    join(homedir(), ".agent-link", "config.json");
+    join(homedir(), ".agent-link", "config.json")
+  );
+}
+
+async function loadUserConfig(): Promise<UserConfig> {
+  const path = configPath();
+  let raw: string;
   try {
-    const raw = await readFile(configPath, "utf8");
-    const parsed = userConfigSchema.safeParse(JSON.parse(raw));
-    if (!parsed.success) return {};
-    return { agents: parsed.data.agents };
-  } catch {
+    raw = await readFile(path, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      process.stderr.write(
+        `[agent-link] Failed to load config at ${path}: ${
+          err instanceof Error ? err.message : String(err)
+        }\n`
+      );
+    }
     return {};
   }
+
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch (err) {
+    process.stderr.write(
+      `[agent-link] Failed to load config at ${path}: ${
+        err instanceof Error ? err.message : String(err)
+      }\n`
+    );
+    return {};
+  }
+
+  const parsed = userConfigSchema.safeParse(json);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const keyPath = issue?.path.join(".") ?? "";
+    process.stderr.write(
+      `[agent-link] Failed to load config at ${path}: ${keyPath} ${
+        issue?.message ?? "invalid"
+      }\n`
+    );
+    return {};
+  }
+
+  if (!parsed.data.agents) return {};
+  const agents = Object.fromEntries(
+    Object.entries(parsed.data.agents).map(([k, v]) => [k.toLowerCase(), v])
+  );
+  return { agents };
 }
 
 export async function resolveAgentConfig(
@@ -43,20 +83,15 @@ export async function resolveAgentConfig(
 export async function listAvailableAgents(): Promise<string[]> {
   const userConfig = await loadUserConfig();
   const merged = { ...DEFAULT_AGENTS, ...(userConfig.agents ?? {}) };
-  const available: string[] = [];
-  for (const [name, cfg] of Object.entries(merged)) {
-    if (isCommandAvailable(cfg.command)) available.push(name);
-  }
-  return available;
+  const entries = Object.entries(merged);
+  const flags = await Promise.all(
+    entries.map(([, cfg]) => isCommandAvailable(cfg.command))
+  );
+  return entries.filter((_, i) => flags[i]).map(([name]) => name);
 }
 
-function isCommandAvailable(cmd: string): boolean {
-  try {
-    execFileSync("which", [cmd], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
+async function isCommandAvailable(cmd: string): Promise<boolean> {
+  return (await which(cmd, { nothrow: true })) !== null;
 }
 
 // ── Spawn ─────────────────────────────────────────────────────────────────────
