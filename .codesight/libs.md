@@ -18,5 +18,6 @@
   - function parseQuestion: (text) => string
   - function resolveAgentConfig: (agentName) => Promise<AgentConfig | null>
   - function listAvailableAgents: () => Promise<string[]>
+  - function resolveEnv: (cfg, "env">, base) => NodeJS.ProcessEnv
   - function spawnAgent: (opts) => Promise<SpawnResult>
   - interface SpawnResult

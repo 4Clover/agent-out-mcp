@@ -1,9 +1,28 @@
-import type { ProcessSession } from "./process-session.js";
+import { TERMINAL_KINDS, type ProcessSession } from "./process-session.js";
+
+const TTL_MS = 5 * 60 * 1000;
 
 const sessions = new Map<string, ProcessSession>();
+const timers = new Map<string, NodeJS.Timeout>();
+
+function scheduleEviction(agentId: string): void {
+  if (timers.has(agentId)) return;
+  const t = setTimeout(() => {
+    sessions.delete(agentId);
+    timers.delete(agentId);
+  }, TTL_MS);
+  if (typeof t.unref === "function") t.unref();
+  timers.set(agentId, t);
+}
 
 export function registerSession(session: ProcessSession): void {
   sessions.set(session.agentId, session);
+  // If somehow registered after the process is already terminal, evict.
+  if (TERMINAL_KINDS.has(session.state.kind)) {
+    scheduleEviction(session.agentId);
+    return;
+  }
+  session.on("close", () => scheduleEviction(session.agentId));
 }
 
 export function getSession(agentId: string): ProcessSession | undefined {
@@ -15,5 +34,10 @@ export function listSessions(): ProcessSession[] {
 }
 
 export function deleteSession(agentId: string): void {
+  const t = timers.get(agentId);
+  if (t) {
+    clearTimeout(t);
+    timers.delete(agentId);
+  }
   sessions.delete(agentId);
 }

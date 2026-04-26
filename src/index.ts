@@ -2,7 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { spawnAgentSchema } from "./schemas.js";
+import { spawnAgentSchema, spawnAgentsBatchSchema } from "./schemas.js";
 import { spawnAgent, listAvailableAgents } from "./spawn-agent.js";
 import { getSession, listSessions, deleteSession } from "./session-store.js";
 import { TERMINAL_KINDS } from "./process-session.js";
@@ -10,7 +10,7 @@ import { TERMINAL_KINDS } from "./process-session.js";
 export function createServer(): McpServer {
   const server = new McpServer({
     name: "agent-link-mcp",
-    version: "1.0.0",
+    version: "2.0.0",
   });
 
   registerTools(server);
@@ -57,16 +57,24 @@ server.tool(
   {
     agents: z
       .array(z.object(spawnAgentSchema))
-      .describe("Array of agent spawn configs to run in parallel"),
+      .describe("Array of agent spawn configs to run in parallel (1..10)"),
   },
   async ({ agents }) => {
+    const parsed = spawnAgentsBatchSchema.safeParse(agents);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      return textResult(
+        { error: `Invalid spawn_agents.agents: ${issue?.message ?? "must contain 1 to 10 entries"}` },
+        true
+      );
+    }
     const results = await Promise.allSettled(
-      agents.map((a) => spawnAgent(a))
+      parsed.data.map((a) => spawnAgent(a))
     );
 
     const formatted = results.map((r, i) => {
       if (r.status === "fulfilled") return r.value;
-      return { agent: agents[i].agent, status: "error", error: r.reason?.message ?? "Unknown error" };
+      return { agent: parsed.data[i].agent, status: "error", error: r.reason?.message ?? "Unknown error" };
     });
 
     const summary = {
@@ -76,8 +84,15 @@ server.tool(
       waiting: formatted.filter((r) => r.status === "waiting_for_reply").length,
     };
 
+    const waitingAgents: string[] = [];
+    for (const r of formatted) {
+      if (r.status === "waiting_for_reply" && "agentId" in r && typeof r.agentId === "string") {
+        waitingAgents.push(r.agentId);
+      }
+    }
+
     const hasFailures = summary.failed > 0;
-    return textResult({ summary, results: formatted }, hasFailures);
+    return textResult({ summary, results: formatted, waitingAgents }, hasFailures);
   }
 );
 
@@ -243,7 +258,9 @@ server.tool(
         status: statusOf(state.kind),
         pendingQuestion,
         startedAt: s.startedAt.toISOString(),
-        outputLines: s.outputChunks,
+        outputChunks: s.outputChunks,
+        outputBytes: s.outputBytes,
+        truncated: s.truncated,
       };
     });
     return textResult({ sessions, count: sessions.length });

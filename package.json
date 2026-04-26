@@ -1,6 +1,6 @@
 {
   "name": "agent-link-mcp",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "MCP server that spawns CLI agents as subprocesses with bidirectional communication",
   "type": "module",
   "bin": {

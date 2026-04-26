@@ -94,6 +94,33 @@ async function isCommandAvailable(cmd: string): Promise<boolean> {
   return (await which(cmd, { nothrow: true })) !== null;
 }
 
+const DEFAULT_ENV_ALLOWLIST = [
+  "PATH",
+  "HOME",
+  "USER",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TERM",
+  "SHELL",
+] as const;
+
+export function resolveEnv(
+  cfg: Pick<AgentConfig, "env">,
+  base: NodeJS.ProcessEnv = process.env
+): NodeJS.ProcessEnv {
+  if (cfg.env === "passthrough") return { ...base };
+  const allowlist = new Set<string>(DEFAULT_ENV_ALLOWLIST);
+  if (Array.isArray(cfg.env)) for (const k of cfg.env) allowlist.add(k);
+  // PATH is always included even if base lacks it (caller supplies)
+  allowlist.add("PATH");
+  const out: NodeJS.ProcessEnv = {};
+  for (const key of allowlist) {
+    if (base[key] !== undefined) out[key] = base[key];
+  }
+  return out;
+}
+
 // ── Spawn ─────────────────────────────────────────────────────────────────────
 
 export interface SpawnResult {
@@ -121,7 +148,7 @@ export async function spawnAgent(opts: SpawnOptions): Promise<SpawnResult> {
     command: cfg.command,
     args,
     cwd: opts.cwd,
-    env: process.env,
+    env: resolveEnv(cfg),
     timeoutMs: opts.timeoutMs ?? 3_600_000,
   });
   registerSession(session);
