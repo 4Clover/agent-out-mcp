@@ -86,6 +86,56 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 const { spawn, execFileSync } = vi.mocked(child_process);
 
+interface InteractiveCtrl {
+  proc: EventEmitter & {
+    stdin: Writable;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    pid: number;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  stdinChunks: string[];
+  sendQuestion: (q: string) => void;
+  sendOutput: (text: string) => void;
+  close: (code: number, signal?: NodeJS.Signals | null) => void;
+}
+
+function createInteractive(opts: { killReturns?: boolean } = {}): InteractiveCtrl {
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const stdinChunks: string[] = [];
+  const proc = new EventEmitter() as InteractiveCtrl["proc"];
+  proc.stdin = new Writable({
+    write(chunk, _enc, cb) {
+      stdinChunks.push(chunk.toString());
+      cb();
+    },
+  });
+  proc.stdout = stdout;
+  proc.stderr = stderr;
+  proc.pid = 1234;
+  proc.kill = vi.fn(() => {
+    if (opts.killReturns === false) return false;
+    queueMicrotask(() => {
+      stdout.end();
+      stderr.end();
+      proc.emit("close", null, "SIGTERM");
+    });
+    return true;
+  });
+  return {
+    proc,
+    stdinChunks,
+    sendQuestion: (q) => stdout.write(`[QUESTION] ${q}\n`),
+    sendOutput: (t) => stdout.write(t),
+    close: (code, signal = null) => {
+      stdout.end();
+      stderr.end();
+      proc.emit("close", code, signal);
+    },
+  };
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function parseResult(result: { content: Array<{ type: string; text?: string }> }) {
@@ -130,9 +180,9 @@ describe("MCP server tools", () => {
   });
 
   describe("tool listing", () => {
-    it("registers exactly 6 tools", async () => {
+    it("registers exactly 7 tools", async () => {
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(6);
+      expect(tools).toHaveLength(7);
     });
 
     it("registers all expected tool names", async () => {
@@ -145,6 +195,7 @@ describe("MCP server tools", () => {
         "reply",
         "spawn_agent",
         "spawn_agents",
+        "wait_agent",
       ]);
     });
 
@@ -321,13 +372,14 @@ describe("MCP server tools", () => {
   });
 
   describe("reply", () => {
-    it("returns error for nonexistent session", async () => {
+    it("returns error with agentId: null for nonexistent session", async () => {
       const result = await client.callTool({
         name: "reply",
         arguments: { agentId: "ghost-123", message: "hello" },
       });
       const data = parseResult(result as any);
       expect(data.error).toMatch(/No session found/);
+      expect(data.agentId).toBeNull();
       expect(result.isError).toBe(true);
     });
 
@@ -553,6 +605,219 @@ describe("MCP server tools", () => {
         arguments: { agent: "claude", task: "ok" },
       });
       expect(result.isError).toBeFalsy();
+    });
+  });
+
+  // ── Step 4: reply / kill / wait_agent contracts ──────────────────────────
+
+  describe("reply round-trip and timeout (Step 4)", () => {
+    it("reply forwards stdin and returns the next question with exact captured output", async () => {
+      const ctrl = createInteractive();
+      vi.mocked(spawn).mockImplementationOnce(() => {
+        queueMicrotask(() => ctrl.sendQuestion("first?"));
+        return ctrl.proc as unknown as child_process.ChildProcess;
+      });
+      const spawnRes = await client.callTool({
+        name: "spawn_agent",
+        arguments: { agent: "claude", task: "interactive" },
+      });
+      const { agentId } = parseResult(spawnRes as any);
+
+      const replyPromise = client.callTool({
+        name: "reply",
+        arguments: { agentId, message: "answer1" },
+      });
+      // Drive the next question after the reply has written stdin
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+      ctrl.sendOutput("interim\n");
+      ctrl.sendQuestion("second?");
+      const replyResult = await replyPromise;
+      const data = parseResult(replyResult as any);
+      expect(data.status).toBe("waiting_for_reply");
+      expect(data.question).toBe("second?");
+      expect(data.partial).toBe("interim\n[QUESTION] second?\n");
+      expect(ctrl.stdinChunks.join("")).toBe("answer1\n");
+    });
+
+    it("reply against unknown agentId returns agentId: null and isError", async () => {
+      const result = await client.callTool({
+        name: "reply",
+        arguments: { agentId: "ghost-xyz", message: "hi" },
+      });
+      const data = parseResult(result as any);
+      expect(data.agentId).toBeNull();
+      expect(result.isError).toBe(true);
+    });
+
+    it("reply timeout returns running and a follow-up reply fails because state is no longer waiting", async () => {
+      vi.useFakeTimers();
+      try {
+        const ctrl = createInteractive();
+        vi.mocked(spawn).mockImplementationOnce(() => {
+          queueMicrotask(() => ctrl.sendQuestion("q1"));
+          return ctrl.proc as unknown as child_process.ChildProcess;
+        });
+        const spawnRes = await client.callTool({
+          name: "spawn_agent",
+          arguments: { agent: "claude", task: "interactive" },
+        });
+        const { agentId } = parseResult(spawnRes as any);
+
+        const replyPromise = client.callTool({
+          name: "reply",
+          arguments: { agentId, message: "answer" },
+        });
+        await vi.advanceTimersByTimeAsync(31_000);
+        const replyResult = await replyPromise;
+        const data = parseResult(replyResult as any);
+        expect(data.status).toBe("running");
+
+        // A second reply must fail because state did not flip back to waiting_for_reply
+        const second = await client.callTool({
+          name: "reply",
+          arguments: { agentId, message: "another" },
+        });
+        const secondData = parseResult(second as any);
+        expect(secondData.error).toMatch(/not waiting for a reply/);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe("wait_agent (Step 4)", () => {
+    it("returns immediately for a terminal session", async () => {
+      vi.mocked(spawn).mockImplementationOnce(() =>
+        createFakeProcess({ stdout: "ok\n", exitCode: 0 }) as unknown as child_process.ChildProcess
+      );
+      const spawnRes = await client.callTool({
+        name: "spawn_agent",
+        arguments: { agent: "claude", task: "quick" },
+      });
+      const { agentId } = parseResult(spawnRes as any);
+
+      const result = await client.callTool({
+        name: "wait_agent",
+        arguments: { agentId },
+      });
+      const data = parseResult(result as any);
+      expect(data.status).toBe("done");
+      expect(data.result).toBe("ok");
+    });
+
+    it("returns error for unknown agentId with agentId: null", async () => {
+      const result = await client.callTool({
+        name: "wait_agent",
+        arguments: { agentId: "ghost-xyz" },
+      });
+      const data = parseResult(result as any);
+      expect(data.agentId).toBeNull();
+      expect(result.isError).toBe(true);
+    });
+
+    it("resumes after a reply timeout and observes the next question", async () => {
+      vi.useFakeTimers();
+      try {
+        const ctrl = createInteractive();
+        vi.mocked(spawn).mockImplementationOnce(() => {
+          queueMicrotask(() => ctrl.sendQuestion("q1"));
+          return ctrl.proc as unknown as child_process.ChildProcess;
+        });
+        const spawnRes = await client.callTool({
+          name: "spawn_agent",
+          arguments: { agent: "claude", task: "long" },
+        });
+        const { agentId } = parseResult(spawnRes as any);
+
+        // Trigger reply timeout
+        const replyP = client.callTool({
+          name: "reply",
+          arguments: { agentId, message: "ans" },
+        });
+        await vi.advanceTimersByTimeAsync(31_000);
+        await replyP;
+
+        // wait_agent should still pick up the next question
+        const waitP = client.callTool({
+          name: "wait_agent",
+          arguments: { agentId, timeoutMs: 5_000 },
+        });
+        // Send the late question
+        await vi.advanceTimersByTimeAsync(10);
+        ctrl.sendQuestion("q2");
+        const result = await waitP;
+        const data = parseResult(result as any);
+        expect(data.status).toBe("waiting_for_reply");
+        expect(data.question).toBe("q2");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe("kill_agent contract (Step 4)", () => {
+    it("kill of a still-running session returns killed: true and signaled: true", async () => {
+      const ctrl = createInteractive();
+      vi.mocked(spawn).mockImplementationOnce(() => {
+        queueMicrotask(() => ctrl.sendQuestion("?"));
+        return ctrl.proc as unknown as child_process.ChildProcess;
+      });
+      const spawnRes = await client.callTool({
+        name: "spawn_agent",
+        arguments: { agent: "claude", task: "long" },
+      });
+      const { agentId } = parseResult(spawnRes as any);
+
+      const killRes = await client.callTool({
+        name: "kill_agent",
+        arguments: { agentId },
+      });
+      const data = parseResult(killRes as any);
+      expect(data.killed).toBe(true);
+      expect(data.signaled).toBe(true);
+      expect(data.signal).toBe("SIGTERM");
+    });
+
+    it("kill of an already-done session returns killed: false with reason: already terminal", async () => {
+      vi.mocked(spawn).mockImplementationOnce(() =>
+        createFakeProcess({ stdout: "ok\n", exitCode: 0 }) as unknown as child_process.ChildProcess
+      );
+      const spawnRes = await client.callTool({
+        name: "spawn_agent",
+        arguments: { agent: "claude", task: "fast" },
+      });
+      const { agentId } = parseResult(spawnRes as any);
+      // Session is now done
+      const killRes = await client.callTool({
+        name: "kill_agent",
+        arguments: { agentId },
+      });
+      const data = parseResult(killRes as any);
+      expect(data.killed).toBe(false);
+      expect(data.reason).toBe("already terminal");
+      expect(data.state).toBe("done");
+    });
+
+    it("kill where proc.kill returns false reports killed: false, signaled: false", async () => {
+      const ctrl = createInteractive({ killReturns: false });
+      vi.mocked(spawn).mockImplementationOnce(() => {
+        queueMicrotask(() => ctrl.sendQuestion("?"));
+        return ctrl.proc as unknown as child_process.ChildProcess;
+      });
+      const spawnRes = await client.callTool({
+        name: "spawn_agent",
+        arguments: { agent: "claude", task: "ghost" },
+      });
+      const { agentId } = parseResult(spawnRes as any);
+
+      const killRes = await client.callTool({
+        name: "kill_agent",
+        arguments: { agentId },
+      });
+      const data = parseResult(killRes as any);
+      expect(data.killed).toBe(false);
+      expect(data.signaled).toBe(false);
     });
   });
 });

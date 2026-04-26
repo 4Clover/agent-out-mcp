@@ -2,9 +2,9 @@
 
 > **Stack:** raw-http | none | unknown | typescript
 
-> 0 routes | 0 models | 0 components | 4 lib files | 1 env vars | 0 middleware | 10 events | 0% test coverage
-> **Token savings:** this file is ~800 tokens. Without it, AI exploration would cost ~6,200 tokens. **Saves ~5,300 tokens per conversation.**
-> **Last scanned:** 2026-04-26 19:11 — re-run after significant changes
+> 0 routes | 0 models | 0 components | 4 lib files | 1 env vars | 0 middleware | 15 events | 0% test coverage
+> **Token savings:** this file is ~900 tokens. Without it, AI exploration would cost ~7,100 tokens. **Saves ~6,200 tokens per conversation.**
+> **Last scanned:** 2026-04-26 19:13 — re-run after significant changes
 
 ---
 
@@ -75,6 +75,11 @@
 
 - `exit` [event] — `src/__tests__/process-session.test.ts`
 - `question` [event] — `src/__tests__/process-session.test.ts`
+- `first?` [event] — `src/__tests__/server.test.ts`
+- `second?` [event] — `src/__tests__/server.test.ts`
+- `q1` [event] — `src/__tests__/server.test.ts`
+- `q2` [event] — `src/__tests__/server.test.ts`
+- `?` [event] — `src/__tests__/server.test.ts`
 - `test-1` [event] — `src/__tests__/session-store.test.ts`
 - `nonexistent` [event] — `src/__tests__/session-store.test.ts`
 - `a` [event] — `src/__tests__/session-store.test.ts`

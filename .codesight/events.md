@@ -2,6 +2,11 @@
 
 - `exit` [event] — `src/__tests__/process-session.test.ts`
 - `question` [event] — `src/__tests__/process-session.test.ts`
+- `first?` [event] — `src/__tests__/server.test.ts`
+- `second?` [event] — `src/__tests__/server.test.ts`
+- `q1` [event] — `src/__tests__/server.test.ts`
+- `q2` [event] — `src/__tests__/server.test.ts`
+- `?` [event] — `src/__tests__/server.test.ts`
 - `test-1` [event] — `src/__tests__/session-store.test.ts`
 - `nonexistent` [event] — `src/__tests__/session-store.test.ts`
 - `a` [event] — `src/__tests__/session-store.test.ts`
