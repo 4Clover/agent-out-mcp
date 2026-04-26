@@ -50,6 +50,6 @@ describe("spawnAgent", () => {
     const result = await spawnAgent({ agent: "nonexistent", task: "hello" });
     expect(result.status).toBe("error");
     expect(result.error).toMatch(/Unknown agent/);
-    expect(result.agentId).toBe("");
+    expect(result.agentId).toBeNull();
   });
 });

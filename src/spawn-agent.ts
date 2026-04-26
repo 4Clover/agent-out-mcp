@@ -62,7 +62,7 @@ function isCommandAvailable(cmd: string): boolean {
 // ── Spawn ─────────────────────────────────────────────────────────────────────
 
 export interface SpawnResult {
-  agentId: string;
+  agentId: string | null;
   status: "done" | "waiting_for_reply" | "error";
   result?: string;
   question?: string;
@@ -72,7 +72,7 @@ export interface SpawnResult {
 export async function spawnAgent(opts: SpawnOptions): Promise<SpawnResult> {
   const cfg = await resolveAgentConfig(opts.agent);
   if (!cfg) {
-    return { agentId: "", status: "error", error: `Unknown agent: ${opts.agent}` };
+    return { agentId: null, status: "error", error: `Unknown agent: ${opts.agent}` };
   }
 
   const prompt = buildPrompt(opts);

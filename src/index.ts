@@ -92,27 +92,82 @@ server.tool(
   async ({ agentId, message }) => {
     const session = getSession(agentId);
     if (!session) {
-      return textResult({ error: `No session found for agentId: ${agentId}` }, true);
+      return textResult(
+        { agentId: null, error: `No session found for agentId: ${agentId}` },
+        true
+      );
     }
 
     if (session.state.kind !== "waiting_for_reply") {
       return textResult(
-        { error: `Session ${agentId} is not waiting for a reply (status: ${statusOf(session.state.kind)})` },
+        {
+          agentId,
+          error: `Session ${agentId} is not waiting for a reply (status: ${statusOf(session.state.kind)})`,
+        },
         true
       );
     }
 
     if (!session.write(`${message}\n`)) {
-      return textResult({ error: `Agent ${agentId} stdin is closed` }, true);
+      return textResult({ agentId, error: `Agent ${agentId} stdin is closed` }, true);
     }
 
     const r = await session.waitNext({ timeoutMs: 30_000 });
     if (r.kind === "question") {
-      return textResult({ agentId, status: "waiting_for_reply", question: r.question, partial: r.output });
+      return textResult({
+        agentId,
+        status: "waiting_for_reply",
+        question: r.question,
+        partial: r.output,
+      });
     }
     if (r.kind === "close") {
       const state = r.state;
-      const result = "result" in state ? state.result : "";
+      const result = "result" in state ? state.result.trim() : "";
+      const status = statusOf(state.kind);
+      const payload: Record<string, unknown> = { agentId, status, result };
+      if (state.kind === "error") payload.error = state.error;
+      return textResult(payload);
+    }
+    // timeout: state remains running; caller can use wait_agent to await next event
+    return textResult({ agentId, status: "running", partial: r.output });
+  }
+);
+
+server.tool(
+  "wait_agent",
+  "Wait for the next event (question or close) from a running agent without writing to its stdin. " +
+    "Use this after a reply timeout to observe the next [QUESTION] or process exit.",
+  {
+    agentId: z.string().describe("The agentId returned by spawn_agent"),
+    timeoutMs: z
+      .number()
+      .int()
+      .min(1)
+      .max(3_600_000)
+      .optional()
+      .describe("How long to wait before returning timeout status (default: 30000)"),
+  },
+  async ({ agentId, timeoutMs }) => {
+    const session = getSession(agentId);
+    if (!session) {
+      return textResult(
+        { agentId: null, error: `No session found for agentId: ${agentId}` },
+        true
+      );
+    }
+    const r = await session.waitNext({ timeoutMs: timeoutMs ?? 30_000 });
+    if (r.kind === "question") {
+      return textResult({
+        agentId,
+        status: "waiting_for_reply",
+        question: r.question,
+        partial: r.output,
+      });
+    }
+    if (r.kind === "close") {
+      const state = r.state;
+      const result = "result" in state ? state.result.trim() : "";
       const status = statusOf(state.kind);
       const payload: Record<string, unknown> = { agentId, status, result };
       if (state.kind === "error") payload.error = state.error;
@@ -136,10 +191,29 @@ server.tool(
   async ({ agentId, signal }) => {
     const session = getSession(agentId);
     if (!session) {
-      return textResult({ error: `Session not found: ${agentId}` }, true);
+      return textResult({ agentId: null, error: `Session not found: ${agentId}` }, true);
     }
-    const killed = session.kill(signal);
-    return textResult({ agentId, killed, signal });
+    const wasTerminal = TERMINAL_KINDS.has(session.state.kind);
+    const signaled = session.kill(signal);
+    if (wasTerminal) {
+      return textResult({
+        agentId,
+        killed: false,
+        signaled: false,
+        reason: "already terminal",
+        state: session.state.kind,
+        signal,
+      });
+    }
+    // Wait for the close to fire so finalState is accurate
+    await session.waitNext();
+    return textResult({
+      agentId,
+      killed: signaled,
+      signaled,
+      finalState: session.state.kind,
+      signal,
+    });
   }
 );
 
