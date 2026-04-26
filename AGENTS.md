@@ -99,10 +99,12 @@ config shape matches `agentConfigSchema` from `schemas.ts`:
 - `flagMap` keys are restricted to known logical options (`model`,
   `thinking`).
 - `env` defaults to a small allowlist
-  (`PATH`, `HOME`, `USER`, `LANG`, `LC_*`, `TERM`, `SHELL`); `PATH` is
-  always present even when `env: []`. Set `env: "passthrough"` to inherit
-  the full parent process env, or supply a string array to extend the
-  allowlist with named variables.
+  (`PATH`, `HOME`, `USER`, `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`,
+  `LC_NUMERIC`, `LC_TIME`, `LC_COLLATE`, `LC_MONETARY`, `TERM`, `SHELL`);
+  `PATH` is always present even when `env: []`. Set `env: "passthrough"`
+  to inherit the full parent process env, or supply a string array of
+  valid env var names (matching `^[a-zA-Z_][a-zA-Z0-9_]*$`) to extend
+  the allowlist.
 - Keys are lowercased at load time. A user-config entry whose lowercased
   key matches a built-in default (e.g. `"Claude"` vs built-in `claude`)
   **overrides** the default; the original casing is not independently
@@ -121,6 +123,11 @@ Override the config path with the `AGENT_LINK_CONFIG` environment variable.
   with the lowercased agent name (e.g. `claude-1a2b3c4d5e6f7890`).
 - Output is byte-capped at 8 MB per session and reported via
   `outputBytes` / `outputChunks` / `truncated` on `get_status`.
+- `model` must match `^[a-zA-Z0-9_][a-zA-Z0-9_.\-:/@]*$` (max 128 chars).
+- `timeoutMs` must be an integer in `[1000, 86400000]`.
+- Maximum 50 concurrent sessions (enforced by session-store).
+- `kill_agent` waits up to 30 seconds for the child to close; does not
+  hang indefinitely if the process ignores the signal.
 
 ## MCP wire surfaces
 

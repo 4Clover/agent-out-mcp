@@ -57,6 +57,8 @@ server.tool(
   {
     agents: z
       .array(z.object(spawnAgentSchema))
+      .min(1)
+      .max(10)
       .describe("Array of agent spawn configs to run in parallel (1..10)"),
   },
   async ({ agents }) => {

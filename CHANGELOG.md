@@ -59,7 +59,30 @@ flagged in that review.
   user-config entry whose lowercased key matches a built-in default (e.g.
   `"Claude"` vs built-in `claude`) overrides the default.
 
-### Fixed
+### Fixed (post-review hardening — 2026-04-26)
+- HIGH: `kill_agent` called `waitNext()` with no timeout after sending the
+  kill signal. A child that ignores SIGTERM would hang the tool call
+  indefinitely. Now waits up to 30 seconds.
+- HIGH: `model` flag accepted arbitrary strings (including `--flag` values
+  that a child CLI could interpret as its own flags). Now validated with
+  `^[a-zA-Z0-9_][a-zA-Z0-9_.\-:/@]*$`, max 128 chars.
+- MEDIUM: `timeoutMs` on `spawn_agent` accepted `0`, negative, and
+  non-integer values. Now bounded to `int ∈ [1000, 86400000]`.
+- MEDIUM: `kill()` set `terminationReason = "user"` after `proc.kill()`,
+  creating a theoretical race with the `'close'` event handler. Now set
+  before the signal is sent.
+- MEDIUM: `currentRun` and waiter `buffered` accumulators were unbounded;
+  now capped at `maxOutputBytes`.
+- MEDIUM: `LC_*` env allowlist only included `LC_ALL`/`LC_CTYPE`. Now
+  includes all standard locale categories.
+- MEDIUM: `spawn_agents` tool schema did not enforce the 1..10 batch cap;
+  `.min(1).max(10)` now applied at the schema level.
+- LOW: `env` array entries accepted arbitrary strings (including `=`).
+  Now validated as legal env var names (`^[a-zA-Z_][a-zA-Z0-9_]*$`).
+- LOW: No concurrent session limit. Session store now enforces max 50.
+- Removed dead `parseQuestion()` export from `spawn-agent.ts`.
+
+### Fixed (v2.0.0 initial release)
 - HIGH: `[QUESTION]` parser previously did chunk-substring matching; markers
   split across `data` events were missed and mid-line matches falsely fired.
 - HIGH: `reply` previously registered a second stdout listener for the
