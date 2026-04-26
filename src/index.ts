@@ -220,13 +220,13 @@ server.tool(
         signal,
       });
     }
-    // Wait for the close to fire so finalState is accurate
-    await session.waitNext();
+    const r = await session.waitNext({ timeoutMs: 30_000 });
+    const finalState = r.kind === "close" ? r.state.kind : session.state.kind;
     return textResult({
       agentId,
       killed: signaled,
       signaled,
-      finalState: session.state.kind,
+      finalState: statusOf(finalState),
       signal,
     });
   }

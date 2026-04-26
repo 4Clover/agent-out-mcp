@@ -114,7 +114,15 @@ export function createProcessSession(
       truncated = true;
     }
     currentRun += tagged;
-    for (const w of waiters) w.buffered += tagged;
+    if (Buffer.byteLength(currentRun) > maxBytes) {
+      currentRun = currentRun.slice(-maxBytes);
+    }
+    for (const w of waiters) {
+      w.buffered += tagged;
+      if (Buffer.byteLength(w.buffered) > maxBytes) {
+        w.buffered = w.buffered.slice(-maxBytes);
+      }
+    }
     emitter.emit("output", tagged, source);
   }
 
@@ -233,6 +241,10 @@ export function createProcessSession(
   function kill(signal?: NodeJS.Signals): boolean {
     if (TERMINAL_KINDS.has(state.kind)) return false;
     const wasKilling = state.kind === "killing";
+    if (!wasKilling) {
+      terminationReason = "user";
+      setState({ kind: "killing", reason: "user" });
+    }
     let signaled = false;
     try {
       signaled = proc.kill(signal);
@@ -246,10 +258,6 @@ export function createProcessSession(
         result: collectOutput(),
       });
       return false;
-    }
-    if (!wasKilling) {
-      terminationReason = "user";
-      setState({ kind: "killing", reason: "user" });
     }
     return true;
   }

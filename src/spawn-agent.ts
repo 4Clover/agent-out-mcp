@@ -8,10 +8,6 @@ import { SpawnOptions, userConfigSchema } from "./schemas.js";
 import { createProcessSession } from "./process-session.js";
 import { registerSession } from "./session-store.js";
 
-export function parseQuestion(text: string): string {
-  return text.split("[QUESTION]")[1]?.split("\n")[0]?.trim() ?? text.trim();
-}
-
 // ── Config loading ────────────────────────────────────────────────────────────
 
 interface UserConfig {
@@ -101,6 +97,11 @@ const DEFAULT_ENV_ALLOWLIST = [
   "LANG",
   "LC_ALL",
   "LC_CTYPE",
+  "LC_MESSAGES",
+  "LC_NUMERIC",
+  "LC_TIME",
+  "LC_COLLATE",
+  "LC_MONETARY",
   "TERM",
   "SHELL",
 ] as const;

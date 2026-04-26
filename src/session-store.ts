@@ -1,6 +1,7 @@
 import { TERMINAL_KINDS, type ProcessSession } from "./process-session.js";
 
 const TTL_MS = 5 * 60 * 1000;
+const MAX_SESSIONS = 50;
 
 const sessions = new Map<string, ProcessSession>();
 const timers = new Map<string, NodeJS.Timeout>();
@@ -16,6 +17,9 @@ function scheduleEviction(agentId: string): void {
 }
 
 export function registerSession(session: ProcessSession): void {
+  if (sessions.size >= MAX_SESSIONS) {
+    throw new Error(`Session limit reached (${MAX_SESSIONS} active sessions)`);
+  }
   sessions.set(session.agentId, session);
   // If somehow registered after the process is already terminal, evict.
   if (TERMINAL_KINDS.has(session.state.kind)) {

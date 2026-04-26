@@ -15,7 +15,6 @@
   - function listSessions: () => ProcessSession[]
   - function deleteSession: (agentId) => void
 - `src/spawn-agent.ts`
-  - function parseQuestion: (text) => string
   - function resolveAgentConfig: (agentName) => Promise<AgentConfig | null>
   - function listAvailableAgents: () => Promise<string[]>
   - function resolveEnv: (cfg, "env">, base) => NodeJS.ProcessEnv

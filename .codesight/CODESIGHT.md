@@ -4,7 +4,7 @@
 
 > 0 routes | 0 models | 0 components | 4 lib files | 1 env vars | 0 middleware | 18 events | 0% test coverage
 > **Token savings:** this file is ~1,000 tokens. Without it, AI exploration would cost ~7,900 tokens. **Saves ~6,900 tokens per conversation.**
-> **Last scanned:** 2026-04-26 20:11 — re-run after significant changes
+> **Last scanned:** 2026-04-26 20:13 — re-run after significant changes
 
 ---
 
@@ -25,7 +25,6 @@
   - function listSessions: () => ProcessSession[]
   - function deleteSession: (agentId) => void
 - `src/spawn-agent.ts`
-  - function parseQuestion: (text) => string
   - function resolveAgentConfig: (agentName) => Promise<AgentConfig | null>
   - function listAvailableAgents: () => Promise<string[]>
   - function resolveEnv: (cfg, "env">, base) => NodeJS.ProcessEnv

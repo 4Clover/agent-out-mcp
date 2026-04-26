@@ -18,13 +18,21 @@ export const spawnOptionsSchema = z.object({
       intent: z.string().optional().describe("High-level intent hint for the agent"),
     })
     .optional(),
-  model: z.string().optional().describe("Override the agent's default model"),
+  model: z
+    .string()
+    .max(128)
+    .regex(/^[a-zA-Z0-9_][a-zA-Z0-9_.\-:/@]*$/, { message: "model must be a valid model identifier" })
+    .optional()
+    .describe("Override the agent's default model"),
   thinking: z
     .enum(["low", "medium", "high", "max"])
     .optional()
     .describe("Thinking intensity (supported by claude)"),
   timeoutMs: z
     .number()
+    .int()
+    .min(1000, { message: "timeoutMs must be at least 1000 (1 second)" })
+    .max(86_400_000, { message: "timeoutMs must not exceed 86400000 (24 hours)" })
     .optional()
     .describe("Timeout in milliseconds (default: 3600000 = 1 hour)"),
   cwd: absolutePath.optional().describe("Absolute working directory for the subprocess"),
@@ -46,7 +54,14 @@ export const agentConfigSchema = z.object({
   promptFlag: z.string().nullable().default(null),
   flagMap: flagMapSchema.default({}),
   env: z
-    .union([z.literal("passthrough"), z.array(z.string())])
+    .union([
+      z.literal("passthrough"),
+      z.array(
+        z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_]*$/, {
+          message: "env entry must be a valid environment variable name",
+        })
+      ),
+    ])
     .optional(),
 });
 export type AgentConfigSchema = z.infer<typeof agentConfigSchema>;
