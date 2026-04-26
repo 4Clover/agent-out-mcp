@@ -2,9 +2,9 @@
 
 > **Stack:** raw-http | none | unknown | typescript
 
-> 0 routes | 0 models | 0 components | 3 lib files | 1 env vars | 0 middleware | 0% test coverage
-> **Token savings:** this file is ~600 tokens. Without it, AI exploration would cost ~3,200 tokens. **Saves ~2,700 tokens per conversation.**
-> **Last scanned:** 2026-04-26 18:12 — re-run after significant changes
+> 0 routes | 0 models | 0 components | 3 lib files | 1 env vars | 0 middleware | 2 events | 0% test coverage
+> **Token savings:** this file is ~600 tokens. Without it, AI exploration would cost ~3,700 tokens. **Saves ~3,100 tokens per conversation.**
+> **Last scanned:** 2026-04-26 19:03 — re-run after significant changes
 
 ---
 
@@ -62,10 +62,17 @@
 
 ---
 
+# Events & Queues
+
+- `exit` [event] — `src/__tests__/process-session.test.ts`
+- `question` [event] — `src/__tests__/process-session.test.ts`
+
+---
+
 # Test Coverage
 
 > **0%** of routes and models are covered by tests
-> 3 test files found
+> 4 test files found
 
 ---
 
