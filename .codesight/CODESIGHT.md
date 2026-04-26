@@ -2,15 +2,23 @@
 
 > **Stack:** raw-http | none | unknown | typescript
 
-> 0 routes | 0 models | 0 components | 3 lib files | 1 env vars | 0 middleware | 2 events | 0% test coverage
-> **Token savings:** this file is ~600 tokens. Without it, AI exploration would cost ~3,700 tokens. **Saves ~3,100 tokens per conversation.**
-> **Last scanned:** 2026-04-26 19:03 — re-run after significant changes
+> 0 routes | 0 models | 0 components | 4 lib files | 1 env vars | 0 middleware | 4 events | 0% test coverage
+> **Token savings:** this file is ~700 tokens. Without it, AI exploration would cost ~4,500 tokens. **Saves ~3,800 tokens per conversation.**
+> **Last scanned:** 2026-04-26 19:06 — re-run after significant changes
 
 ---
 
 # Libraries
 
 - `src/index.ts` — function createServer: () => McpServer
+- `src/process-session.ts`
+  - function createProcessSession: (opts) => ProcessSession
+  - interface ProcessSessionEvents
+  - interface ProcessSession
+  - interface CreateProcessSessionOptions
+  - type SessionState
+  - type WaitResult
+  - _...1 more_
 - `src/session-store.ts`
   - function createSession: (partial, "output" | "startedAt">) => AgentSession
   - function getSession: (agentId) => AgentSession | undefined
@@ -66,6 +74,8 @@
 
 - `exit` [event] — `src/__tests__/process-session.test.ts`
 - `question` [event] — `src/__tests__/process-session.test.ts`
+- `output` [event] — `src/process-session.ts`
+- `line` [event] — `src/process-session.ts`
 
 ---
 

@@ -1,6 +1,14 @@
 # Libraries
 
 - `src/index.ts` — function createServer: () => McpServer
+- `src/process-session.ts`
+  - function createProcessSession: (opts) => ProcessSession
+  - interface ProcessSessionEvents
+  - interface ProcessSession
+  - interface CreateProcessSessionOptions
+  - type SessionState
+  - type WaitResult
+  - _...1 more_
 - `src/session-store.ts`
   - function createSession: (partial, "output" | "startedAt">) => AgentSession
   - function getSession: (agentId) => AgentSession | undefined

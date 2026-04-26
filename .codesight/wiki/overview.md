@@ -6,7 +6,7 @@
 
 ## Scale
 
-3 library files · 1 environment variables
+4 library files · 1 environment variables
 
 ## High-Impact Files
 
