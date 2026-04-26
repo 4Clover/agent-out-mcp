@@ -5,13 +5,18 @@ import { z } from "zod";
 import { spawnAgent, listAvailableAgents, parseQuestion } from "./spawn-agent.js";
 import { getSession, listSessions, deleteSession } from "./session-store.js";
 
-const server = new McpServer({
-  name: "agent-link-mcp",
-  version: "1.0.0",
-});
+export function createServer(): McpServer {
+  const server = new McpServer({
+    name: "agent-link-mcp",
+    version: "1.0.0",
+  });
 
-function textResult(data: unknown) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+  registerTools(server);
+  return server;
+}
+
+function textResult(data: unknown, isError = false) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }], isError };
 }
 
 const spawnAgentSchema = {
@@ -38,6 +43,8 @@ const spawnAgentSchema = {
   cwd: z.string().optional().describe("Working directory for the subprocess"),
 };
 
+function registerTools(server: McpServer): void {
+
 // ── spawn_agent ───────────────────────────────────────────────────────────────
 
 server.tool(
@@ -58,7 +65,7 @@ server.tool(
     if (result.status === "waiting_for_reply") response.question = result.question;
     if (result.status === "error") response.error = result.error;
 
-    return textResult(response);
+    return textResult(response, result.status === "error");
   }
 );
 
@@ -90,7 +97,8 @@ server.tool(
       waiting: formatted.filter((r) => r.status === "waiting_for_reply").length,
     };
 
-    return textResult({ summary, results: formatted });
+    const hasFailures = summary.failed > 0;
+    return textResult({ summary, results: formatted }, hasFailures);
   }
 );
 
@@ -107,21 +115,26 @@ server.tool(
   async ({ agentId, message }) => {
     const session = getSession(agentId);
     if (!session) {
-      return textResult({ error: `No session found for agentId: ${agentId}` });
+      return textResult({ error: `No session found for agentId: ${agentId}` }, true);
     }
 
     if (session.status !== "waiting_for_reply") {
-      return textResult({
-        error: `Session ${agentId} is not waiting for a reply (status: ${session.status})`,
-      });
+      return textResult(
+        { error: `Session ${agentId} is not waiting for a reply (status: ${session.status})` },
+        true
+      );
     }
 
     session.status = "running";
     session.pendingQuestion = undefined;
-    session.process.stdin?.write(`${message}\n`);
+    const outputStart = session.output.length;
+
+    if (!session.process.stdin?.writable) {
+      return textResult({ error: `Agent ${agentId} stdin is closed` }, true);
+    }
+    session.process.stdin.write(`${message}\n`);
 
     const result = await new Promise<Record<string, unknown>>((resolve) => {
-      let buffer = "";
       let resolved = false;
 
       const stdout = session.process.stdout!;
@@ -132,9 +145,11 @@ server.tool(
         clearTimeout(timer);
       };
 
+      const collectOutput = () =>
+        session.output.slice(outputStart).join("").trim();
+
       const onData = (chunk: Buffer) => {
         const text = chunk.toString();
-        buffer += text;
         session.output.push(text);
 
         if (text.includes("[QUESTION]")) {
@@ -154,16 +169,15 @@ server.tool(
         if (!resolved) {
           resolved = true;
           cleanup();
-          resolve({ agentId, status: session.status, result: buffer.trim() });
+          resolve({ agentId, status: session.status, result: collectOutput() });
         }
       };
 
-      // 30-second silence timeout: return partial output without killing the process
       const timer = setTimeout(() => {
         if (!resolved) {
           resolved = true;
           cleanup();
-          resolve({ agentId, status: "running", partial: buffer.trim() });
+          resolve({ agentId, status: "running", partial: collectOutput() });
         }
       }, 30_000);
 
@@ -191,7 +205,7 @@ server.tool(
   async ({ agentId, signal }) => {
     const session = getSession(agentId);
     if (!session) {
-      return textResult({ error: `Session not found: ${agentId}` });
+      return textResult({ error: `Session not found: ${agentId}` }, true);
     }
     session.process.kill(signal);
     deleteSession(agentId);
@@ -231,7 +245,16 @@ server.tool(
   }
 );
 
-// ── Start server ──────────────────────────────────────────────────────────────
+} // end registerTools
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+// ── Start server (only when run directly) ────────────────────────────────────
+
+import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
+
+const isMain = resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url);
+if (isMain) {
+  const transport = new StdioServerTransport();
+  const server = createServer();
+  await server.connect(transport);
+}

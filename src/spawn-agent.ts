@@ -1,5 +1,4 @@
-import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { spawn, execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -21,7 +20,6 @@ async function loadUserConfig(): Promise<UserConfig> {
   const configPath =
     process.env.AGENT_LINK_CONFIG ??
     join(homedir(), ".agent-link", "config.json");
-  if (!existsSync(configPath)) return {};
   try {
     const raw = await readFile(configPath, "utf8");
     return JSON.parse(raw) as UserConfig;
@@ -51,8 +49,7 @@ export async function listAvailableAgents(): Promise<string[]> {
 
 function isCommandAvailable(cmd: string): boolean {
   try {
-    const result = spawn(cmd, ["--version"], { stdio: "ignore" });
-    result.kill();
+    execFileSync("which", [cmd], { stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -116,6 +113,7 @@ function buildArgs(cfg: AgentConfig, prompt: string, opts: SpawnOptions): string
   const args = [...cfg.args];
 
   if (opts.model) args.push("--model", opts.model);
+  if (opts.thinking) args.push("--thinking", opts.thinking);
 
   if (cfg.promptFlag) {
     args.push(cfg.promptFlag, prompt);
