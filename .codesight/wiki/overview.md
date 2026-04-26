@@ -12,11 +12,11 @@
 
 Changes to these files have the widest blast radius across the codebase:
 
+- `src/process-session.ts` — imported by **4** files
 - `src/session-store.ts` — imported by **3** files
 - `src/schemas.ts` — imported by **3** files
 - `src/spawn-agent.ts` — imported by **2** files
 - `src/index.ts` — imported by **1** files
-- `src/process-session.ts` — imported by **1** files
 - `src/agents.ts` — imported by **1** files
 
 ## Required Environment Variables

@@ -1,34 +1,16 @@
-import { ChildProcess } from "node:child_process";
+import type { ProcessSession } from "./process-session.js";
 
-export interface AgentSession {
-  agentId: string;
-  agent: string;
-  task: string;
-  process: ChildProcess;
-  status: "running" | "waiting_for_reply" | "done" | "error";
-  pendingQuestion?: string;
-  output: string[];
-  startedAt: Date;
-}
+const sessions = new Map<string, ProcessSession>();
 
-// In-memory session store (lives for the duration of the MCP server process)
-const sessions = new Map<string, AgentSession>();
-
-export function createSession(partial: Omit<AgentSession, "output" | "startedAt">): AgentSession {
-  const session: AgentSession = {
-    ...partial,
-    output: [],
-    startedAt: new Date(),
-  };
+export function registerSession(session: ProcessSession): void {
   sessions.set(session.agentId, session);
-  return session;
 }
 
-export function getSession(agentId: string): AgentSession | undefined {
+export function getSession(agentId: string): ProcessSession | undefined {
   return sessions.get(agentId);
 }
 
-export function listSessions(): AgentSession[] {
+export function listSessions(): ProcessSession[] {
   return Array.from(sessions.values());
 }
 

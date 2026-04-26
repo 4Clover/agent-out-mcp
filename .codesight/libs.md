@@ -10,11 +10,10 @@
   - type WaitResult
   - _...1 more_
 - `src/session-store.ts`
-  - function createSession: (partial, "output" | "startedAt">) => AgentSession
-  - function getSession: (agentId) => AgentSession | undefined
-  - function listSessions: () => AgentSession[]
+  - function registerSession: (session) => void
+  - function getSession: (agentId) => ProcessSession | undefined
+  - function listSessions: () => ProcessSession[]
   - function deleteSession: (agentId) => void
-  - interface AgentSession
 - `src/spawn-agent.ts`
   - function parseQuestion: (text) => string
   - function resolveAgentConfig: (agentName) => Promise<AgentConfig | null>

@@ -4,7 +4,7 @@
 
 > 0 routes | 0 models | 0 components | 4 lib files | 1 env vars | 0 middleware | 10 events | 0% test coverage
 > **Token savings:** this file is ~800 tokens. Without it, AI exploration would cost ~6,200 tokens. **Saves ~5,300 tokens per conversation.**
-> **Last scanned:** 2026-04-26 19:10 — re-run after significant changes
+> **Last scanned:** 2026-04-26 19:11 — re-run after significant changes
 
 ---
 
@@ -20,11 +20,10 @@
   - type WaitResult
   - _...1 more_
 - `src/session-store.ts`
-  - function createSession: (partial, "output" | "startedAt">) => AgentSession
-  - function getSession: (agentId) => AgentSession | undefined
-  - function listSessions: () => AgentSession[]
+  - function registerSession: (session) => void
+  - function getSession: (agentId) => ProcessSession | undefined
+  - function listSessions: () => ProcessSession[]
   - function deleteSession: (agentId) => void
-  - interface AgentSession
 - `src/spawn-agent.ts`
   - function parseQuestion: (text) => string
   - function resolveAgentConfig: (agentName) => Promise<AgentConfig | null>
@@ -54,20 +53,20 @@
 
 ## Most Imported Files (change these carefully)
 
+- `src/process-session.ts` — imported by **4** files
 - `src/session-store.ts` — imported by **3** files
 - `src/schemas.ts` — imported by **3** files
 - `src/spawn-agent.ts` — imported by **2** files
 - `src/index.ts` — imported by **1** files
-- `src/process-session.ts` — imported by **1** files
 - `src/agents.ts` — imported by **1** files
 
 ## Import Map (who imports what)
 
+- `src/process-session.ts` ← `src/__tests__/session-store.test.ts`, `src/index.ts`, `src/session-store.ts`, `src/spawn-agent.ts`
 - `src/session-store.ts` ← `src/__tests__/server.test.ts`, `src/index.ts`, `src/spawn-agent.ts`
 - `src/schemas.ts` ← `src/agents.ts`, `src/index.ts`, `src/spawn-agent.ts`
 - `src/spawn-agent.ts` ← `src/__tests__/spawn-agent.test.ts`, `src/index.ts`
 - `src/index.ts` ← `src/__tests__/server.test.ts`
-- `src/process-session.ts` ← `src/__tests__/session-store.test.ts`
 - `src/agents.ts` ← `src/spawn-agent.ts`
 
 ---
