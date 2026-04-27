@@ -5,22 +5,25 @@ import { createServer } from "../index.js";
 import { listSessions, deleteSession } from "../session-store.js";
 import * as child_process from "node:child_process";
 import { EventEmitter } from "node:events";
-import { Writable } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 
 // ── Mock child_process to prevent spawning real CLIs ─────────────────────────
 
-function createFakeProcess(opts?: {
+interface FakeProcOpts {
   stdout?: string;
   exitCode?: number;
   question?: string;
   emitError?: Error;
-}) {
-  const stdout = new EventEmitter();
-  const stderr = new EventEmitter();
+  splitQuestion?: boolean;
+}
+
+function createFakeProcess(opts?: FakeProcOpts) {
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
   const proc = new EventEmitter() as EventEmitter & {
     stdin: Writable;
-    stdout: EventEmitter;
-    stderr: EventEmitter;
+    stdout: PassThrough;
+    stderr: PassThrough;
     pid: number;
     kill: ReturnType<typeof vi.fn>;
   };
@@ -30,7 +33,11 @@ function createFakeProcess(opts?: {
   proc.stderr = stderr;
   proc.pid = 9999;
   proc.kill = vi.fn(() => {
-    proc.emit("close", null);
+    queueMicrotask(() => {
+      stdout.end();
+      stderr.end();
+      proc.emit("close", null, "SIGTERM");
+    });
     return true;
   });
 
@@ -40,12 +47,28 @@ function createFakeProcess(opts?: {
       return;
     }
     if (opts?.question) {
-      stdout.emit("data", Buffer.from(`[QUESTION] ${opts.question}\n`));
+      if (opts.splitQuestion) {
+        // Split [QUESTION] across two chunks to exercise the cross-chunk parser
+        stdout.write("[QUESTI");
+        queueMicrotask(() => {
+          stdout.write(`ON] ${opts.question}\n`);
+        });
+      } else {
+        stdout.write(`[QUESTION] ${opts.question}\n`);
+      }
     } else if (opts?.stdout !== undefined) {
-      stdout.emit("data", Buffer.from(opts.stdout));
-      queueMicrotask(() => proc.emit("close", opts?.exitCode ?? 0));
+      stdout.write(opts.stdout);
+      queueMicrotask(() => {
+        stdout.end();
+        stderr.end();
+        proc.emit("close", opts?.exitCode ?? 0, null);
+      });
     } else {
-      queueMicrotask(() => proc.emit("close", opts?.exitCode ?? 0));
+      queueMicrotask(() => {
+        stdout.end();
+        stderr.end();
+        proc.emit("close", opts?.exitCode ?? 0, null);
+      });
     }
   });
 
@@ -57,11 +80,64 @@ vi.mock("node:child_process", async (importOriginal) => {
   return {
     ...original,
     spawn: vi.fn(() => createFakeProcess({ stdout: "mock output\n", exitCode: 0 })),
-    execFileSync: vi.fn(() => Buffer.from("/usr/bin/mock")),
   };
 });
 
-const { spawn, execFileSync } = vi.mocked(child_process);
+vi.mock("which", () => ({
+  default: vi.fn(async () => "/usr/bin/mock"),
+}));
+
+const { spawn } = vi.mocked(child_process);
+
+interface InteractiveCtrl {
+  proc: EventEmitter & {
+    stdin: Writable;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    pid: number;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  stdinChunks: string[];
+  sendQuestion: (q: string) => void;
+  sendOutput: (text: string) => void;
+  close: (code: number, signal?: NodeJS.Signals | null) => void;
+}
+
+function createInteractive(opts: { killReturns?: boolean } = {}): InteractiveCtrl {
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  const stdinChunks: string[] = [];
+  const proc = new EventEmitter() as InteractiveCtrl["proc"];
+  proc.stdin = new Writable({
+    write(chunk, _enc, cb) {
+      stdinChunks.push(chunk.toString());
+      cb();
+    },
+  });
+  proc.stdout = stdout;
+  proc.stderr = stderr;
+  proc.pid = 1234;
+  proc.kill = vi.fn(() => {
+    if (opts.killReturns === false) return false;
+    queueMicrotask(() => {
+      stdout.end();
+      stderr.end();
+      proc.emit("close", null, "SIGTERM");
+    });
+    return true;
+  });
+  return {
+    proc,
+    stdinChunks,
+    sendQuestion: (q) => stdout.write(`[QUESTION] ${q}\n`),
+    sendOutput: (t) => stdout.write(t),
+    close: (code, signal = null) => {
+      stdout.end();
+      stderr.end();
+      proc.emit("close", code, signal);
+    },
+  };
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -93,7 +169,7 @@ describe("MCP server tools", () => {
 
   afterAll(async () => {
     for (const s of listSessions()) {
-      try { s.process.kill(); } catch {}
+      try { s.kill(); } catch { /* best-effort cleanup */ }
       deleteSession(s.agentId);
     }
     await serverCleanup();
@@ -102,16 +178,14 @@ describe("MCP server tools", () => {
   beforeEach(() => {
     for (const s of listSessions()) deleteSession(s.agentId);
     vi.mocked(spawn).mockImplementation(() =>
-      createFakeProcess({ stdout: "mock output\n", exitCode: 0 }) as any
+      createFakeProcess({ stdout: "mock output\n", exitCode: 0 }) as unknown as child_process.ChildProcess
     );
   });
 
-  // ── Tool listing ─────────────────────────────────────────────────────────
-
   describe("tool listing", () => {
-    it("registers exactly 6 tools", async () => {
+    it("registers exactly 7 tools", async () => {
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(6);
+      expect(tools).toHaveLength(7);
     });
 
     it("registers all expected tool names", async () => {
@@ -124,6 +198,7 @@ describe("MCP server tools", () => {
         "reply",
         "spawn_agent",
         "spawn_agents",
+        "wait_agent",
       ]);
     });
 
@@ -137,8 +212,6 @@ describe("MCP server tools", () => {
     });
   });
 
-  // ── spawn_agent ──────────────────────────────────────────────────────────
-
   describe("spawn_agent", () => {
     it("spawns an agent and returns done status", async () => {
       const result = await client.callTool({
@@ -147,8 +220,17 @@ describe("MCP server tools", () => {
       });
       const data = parseResult(result as any);
       expect(data.status).toBe("done");
-      expect(data.agentId).toMatch(/^claude-/);
+      expect(data.agentId).toMatch(/^claude-[0-9a-f]{16}$/);
       expect(data.result).toBe("mock output");
+    });
+
+    it("uses lowercased agent name in agentId even when input is uppercase", async () => {
+      const result = await client.callTool({
+        name: "spawn_agent",
+        arguments: { agent: "Claude", task: "hi" },
+      });
+      const data = parseResult(result as any);
+      expect(data.agentId).toMatch(/^claude-[0-9a-f]{16}$/);
     });
 
     it("returns error for unknown agent", async () => {
@@ -164,7 +246,7 @@ describe("MCP server tools", () => {
 
     it("returns error when process exits non-zero", async () => {
       vi.mocked(spawn).mockImplementation(() =>
-        createFakeProcess({ exitCode: 1 }) as any
+        createFakeProcess({ exitCode: 1 }) as unknown as child_process.ChildProcess
       );
       const result = await client.callTool({
         name: "spawn_agent",
@@ -177,7 +259,7 @@ describe("MCP server tools", () => {
 
     it("returns waiting_for_reply when process asks a question", async () => {
       vi.mocked(spawn).mockImplementation(() =>
-        createFakeProcess({ question: "What file should I edit?" }) as any
+        createFakeProcess({ question: "What file should I edit?" }) as unknown as child_process.ChildProcess
       );
       const result = await client.callTool({
         name: "spawn_agent",
@@ -188,9 +270,22 @@ describe("MCP server tools", () => {
       expect(data.question).toBe("What file should I edit?");
     });
 
+    it("detects [QUESTION] split across stdout chunks", async () => {
+      vi.mocked(spawn).mockImplementation(() =>
+        createFakeProcess({ question: "Cross-chunk question?", splitQuestion: true }) as unknown as child_process.ChildProcess
+      );
+      const result = await client.callTool({
+        name: "spawn_agent",
+        arguments: { agent: "claude", task: "split test" },
+      });
+      const data = parseResult(result as any);
+      expect(data.status).toBe("waiting_for_reply");
+      expect(data.question).toBe("Cross-chunk question?");
+    });
+
     it("returns error when spawn itself fails", async () => {
       vi.mocked(spawn).mockImplementation(() =>
-        createFakeProcess({ emitError: new Error("ENOENT") }) as any
+        createFakeProcess({ emitError: new Error("ENOENT") }) as unknown as child_process.ChildProcess
       );
       const result = await client.callTool({
         name: "spawn_agent",
@@ -201,7 +296,7 @@ describe("MCP server tools", () => {
       expect(data.error).toBe("ENOENT");
     });
 
-    it("passes optional context, model, and thinking params", async () => {
+    it("passes optional context, model, and thinking params via flagMap", async () => {
       const result = await client.callTool({
         name: "spawn_agent",
         arguments: {
@@ -224,8 +319,6 @@ describe("MCP server tools", () => {
     });
   });
 
-  // ── spawn_agents ─────────────────────────────────────────────────────────
-
   describe("spawn_agents", () => {
     it("spawns multiple agents in parallel", async () => {
       const result = await client.callTool({
@@ -247,8 +340,8 @@ describe("MCP server tools", () => {
       let callCount = 0;
       vi.mocked(spawn).mockImplementation(() => {
         callCount++;
-        if (callCount === 1) return createFakeProcess({ stdout: "ok\n", exitCode: 0 }) as any;
-        return createFakeProcess({ exitCode: 1 }) as any;
+        if (callCount === 1) return createFakeProcess({ stdout: "ok\n", exitCode: 0 }) as unknown as child_process.ChildProcess;
+        return createFakeProcess({ exitCode: 1 }) as unknown as child_process.ChildProcess;
       });
 
       const result = await client.callTool({
@@ -281,22 +374,21 @@ describe("MCP server tools", () => {
     });
   });
 
-  // ── reply ────────────────────────────────────────────────────────────────
-
   describe("reply", () => {
-    it("returns error for nonexistent session", async () => {
+    it("returns error with agentId: null for nonexistent session", async () => {
       const result = await client.callTool({
         name: "reply",
         arguments: { agentId: "ghost-123", message: "hello" },
       });
       const data = parseResult(result as any);
       expect(data.error).toMatch(/No session found/);
+      expect(data.agentId).toBeNull();
       expect(result.isError).toBe(true);
     });
 
     it("returns error when session is not waiting_for_reply", async () => {
       vi.mocked(spawn).mockImplementation(() =>
-        createFakeProcess({ stdout: "done\n", exitCode: 0 }) as any
+        createFakeProcess({ stdout: "done\n", exitCode: 0 }) as unknown as child_process.ChildProcess
       );
       const spawnResult = await client.callTool({
         name: "spawn_agent",
@@ -313,8 +405,6 @@ describe("MCP server tools", () => {
     });
   });
 
-  // ── kill_agent ───────────────────────────────────────────────────────────
-
   describe("kill_agent", () => {
     it("returns error for nonexistent session", async () => {
       const result = await client.callTool({
@@ -328,7 +418,7 @@ describe("MCP server tools", () => {
 
     it("kills a running session", async () => {
       vi.mocked(spawn).mockImplementation(() =>
-        createFakeProcess({ question: "waiting?" }) as any
+        createFakeProcess({ question: "waiting?" }) as unknown as child_process.ChildProcess
       );
       const spawnResult = await client.callTool({
         name: "spawn_agent",
@@ -347,7 +437,7 @@ describe("MCP server tools", () => {
 
     it("accepts SIGKILL signal", async () => {
       vi.mocked(spawn).mockImplementation(() =>
-        createFakeProcess({ question: "?" }) as any
+        createFakeProcess({ question: "?" }) as unknown as child_process.ChildProcess
       );
       const spawnResult = await client.callTool({
         name: "spawn_agent",
@@ -364,8 +454,6 @@ describe("MCP server tools", () => {
     });
   });
 
-  // ── list_agents ──────────────────────────────────────────────────────────
-
   describe("list_agents", () => {
     it("returns a list of available agents", async () => {
       const result = await client.callTool({
@@ -378,7 +466,6 @@ describe("MCP server tools", () => {
     });
 
     it("includes all defaults when all commands are on PATH", async () => {
-      vi.mocked(execFileSync).mockReturnValue(Buffer.from("/usr/bin/mock"));
       const result = await client.callTool({
         name: "list_agents",
         arguments: {},
@@ -390,8 +477,6 @@ describe("MCP server tools", () => {
       expect(data.available).toContain("aider");
     });
   });
-
-  // ── get_status ───────────────────────────────────────────────────────────
 
   describe("get_status", () => {
     it("returns empty when no sessions exist", async () => {
@@ -406,7 +491,7 @@ describe("MCP server tools", () => {
 
     it("returns active sessions with expected shape", async () => {
       vi.mocked(spawn).mockImplementation(() =>
-        createFakeProcess({ question: "??" }) as any
+        createFakeProcess({ question: "??" }) as unknown as child_process.ChildProcess
       );
       await client.callTool({
         name: "spawn_agent",
@@ -424,14 +509,17 @@ describe("MCP server tools", () => {
       expect(session).toHaveProperty("agent", "claude");
       expect(session).toHaveProperty("status", "waiting_for_reply");
       expect(session).toHaveProperty("startedAt");
-      expect(session).toHaveProperty("outputLines");
+      expect(session).toHaveProperty("outputChunks");
+      expect(session).toHaveProperty("outputBytes");
+      expect(session).toHaveProperty("truncated");
+      expect(session).not.toHaveProperty("outputLines");
       expect(session.task).toContain("status test task");
     });
 
     it("truncates long tasks to 80 chars", async () => {
       const longTask = "x".repeat(120);
       vi.mocked(spawn).mockImplementation(() =>
-        createFakeProcess({ stdout: "ok\n", exitCode: 0 }) as any
+        createFakeProcess({ stdout: "ok\n", exitCode: 0 }) as unknown as child_process.ChildProcess
       );
       await client.callTool({
         name: "spawn_agent",
@@ -448,8 +536,6 @@ describe("MCP server tools", () => {
       }
     });
   });
-
-  // ── Schema validation (malformed requests) ───────────────────────────────
 
   describe("schema validation", () => {
     it("returns error for spawn_agent without required agent field", async () => {
@@ -498,8 +584,6 @@ describe("MCP server tools", () => {
     });
   });
 
-  // ── Response shape ───────────────────────────────────────────────────────
-
   describe("response shape", () => {
     it("all tools return content array with text type", async () => {
       const tools = ["list_agents", "get_status"];
@@ -526,6 +610,321 @@ describe("MCP server tools", () => {
         arguments: { agent: "claude", task: "ok" },
       });
       expect(result.isError).toBeFalsy();
+    });
+  });
+
+  // ── Step 4: reply / kill / wait_agent contracts ──────────────────────────
+
+  describe("reply round-trip and timeout (Step 4)", () => {
+    it("reply forwards stdin and returns the next question with exact captured output", async () => {
+      const ctrl = createInteractive();
+      vi.mocked(spawn).mockImplementationOnce(() => {
+        queueMicrotask(() => ctrl.sendQuestion("first?"));
+        return ctrl.proc as unknown as child_process.ChildProcess;
+      });
+      const spawnRes = await client.callTool({
+        name: "spawn_agent",
+        arguments: { agent: "claude", task: "interactive" },
+      });
+      const { agentId } = parseResult(spawnRes as any);
+
+      const replyPromise = client.callTool({
+        name: "reply",
+        arguments: { agentId, message: "answer1" },
+      });
+      // Drive the next question after the reply has written stdin
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+      ctrl.sendOutput("interim\n");
+      ctrl.sendQuestion("second?");
+      const replyResult = await replyPromise;
+      const data = parseResult(replyResult as any);
+      expect(data.status).toBe("waiting_for_reply");
+      expect(data.question).toBe("second?");
+      expect(data.partial).toBe("interim\n[QUESTION] second?\n");
+      expect(ctrl.stdinChunks.join("")).toBe("answer1\n");
+    });
+
+    it("reply against unknown agentId returns agentId: null and isError", async () => {
+      const result = await client.callTool({
+        name: "reply",
+        arguments: { agentId: "ghost-xyz", message: "hi" },
+      });
+      const data = parseResult(result as any);
+      expect(data.agentId).toBeNull();
+      expect(result.isError).toBe(true);
+    });
+
+    it("reply timeout returns running and a follow-up reply fails because state is no longer waiting", async () => {
+      vi.useFakeTimers();
+      try {
+        const ctrl = createInteractive();
+        vi.mocked(spawn).mockImplementationOnce(() => {
+          queueMicrotask(() => ctrl.sendQuestion("q1"));
+          return ctrl.proc as unknown as child_process.ChildProcess;
+        });
+        const spawnRes = await client.callTool({
+          name: "spawn_agent",
+          arguments: { agent: "claude", task: "interactive" },
+        });
+        const { agentId } = parseResult(spawnRes as any);
+
+        const replyPromise = client.callTool({
+          name: "reply",
+          arguments: { agentId, message: "answer" },
+        });
+        await vi.advanceTimersByTimeAsync(31_000);
+        const replyResult = await replyPromise;
+        const data = parseResult(replyResult as any);
+        expect(data.status).toBe("running");
+
+        // A second reply must fail because state did not flip back to waiting_for_reply
+        const second = await client.callTool({
+          name: "reply",
+          arguments: { agentId, message: "another" },
+        });
+        const secondData = parseResult(second as any);
+        expect(secondData.error).toMatch(/not waiting for a reply/);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe("wait_agent (Step 4)", () => {
+    it("returns immediately for a terminal session", async () => {
+      vi.mocked(spawn).mockImplementationOnce(() =>
+        createFakeProcess({ stdout: "ok\n", exitCode: 0 }) as unknown as child_process.ChildProcess
+      );
+      const spawnRes = await client.callTool({
+        name: "spawn_agent",
+        arguments: { agent: "claude", task: "quick" },
+      });
+      const { agentId } = parseResult(spawnRes as any);
+
+      const result = await client.callTool({
+        name: "wait_agent",
+        arguments: { agentId },
+      });
+      const data = parseResult(result as any);
+      expect(data.status).toBe("done");
+      expect(data.result).toBe("ok");
+    });
+
+    it("returns error for unknown agentId with agentId: null", async () => {
+      const result = await client.callTool({
+        name: "wait_agent",
+        arguments: { agentId: "ghost-xyz" },
+      });
+      const data = parseResult(result as any);
+      expect(data.agentId).toBeNull();
+      expect(result.isError).toBe(true);
+    });
+
+    it("resumes after a reply timeout and observes the next question", async () => {
+      vi.useFakeTimers();
+      try {
+        const ctrl = createInteractive();
+        vi.mocked(spawn).mockImplementationOnce(() => {
+          queueMicrotask(() => ctrl.sendQuestion("q1"));
+          return ctrl.proc as unknown as child_process.ChildProcess;
+        });
+        const spawnRes = await client.callTool({
+          name: "spawn_agent",
+          arguments: { agent: "claude", task: "long" },
+        });
+        const { agentId } = parseResult(spawnRes as any);
+
+        // Trigger reply timeout
+        const replyP = client.callTool({
+          name: "reply",
+          arguments: { agentId, message: "ans" },
+        });
+        await vi.advanceTimersByTimeAsync(31_000);
+        await replyP;
+
+        // wait_agent should still pick up the next question
+        const waitP = client.callTool({
+          name: "wait_agent",
+          arguments: { agentId, timeoutMs: 5_000 },
+        });
+        // Send the late question
+        await vi.advanceTimersByTimeAsync(10);
+        ctrl.sendQuestion("q2");
+        const result = await waitP;
+        const data = parseResult(result as any);
+        expect(data.status).toBe("waiting_for_reply");
+        expect(data.question).toBe("q2");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe("kill_agent timeout (HIGH-1 fix)", () => {
+    it("kill_agent returns within timeout even if child ignores SIGTERM", async () => {
+      vi.useFakeTimers();
+      try {
+        const ctrl = createInteractive();
+        // Override kill to NOT close the process (simulates ignoring SIGTERM)
+        ctrl.proc.kill = vi.fn(() => true);
+        vi.mocked(spawn).mockImplementationOnce(() => {
+          queueMicrotask(() => ctrl.sendQuestion("?"));
+          return ctrl.proc as unknown as child_process.ChildProcess;
+        });
+        const spawnRes = await client.callTool({
+          name: "spawn_agent",
+          arguments: { agent: "claude", task: "stubborn" },
+        });
+        const { agentId } = parseResult(spawnRes as any);
+
+        const killPromise = client.callTool({
+          name: "kill_agent",
+          arguments: { agentId },
+        });
+        // Advance past the kill timeout
+        await vi.advanceTimersByTimeAsync(35_000);
+        const result = await killPromise;
+        const data = parseResult(result as any);
+        // Should have returned (not hung) — either killed or timeout-based response
+        expect(data.agentId).toBe(agentId);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe("Step 6: spawn_agents batch limits + waitingAgents", () => {
+    it("rejects empty batch (zero agents)", async () => {
+      const result = await client.callTool({
+        name: "spawn_agents",
+        arguments: { agents: [] },
+      });
+      expect(result.isError).toBe(true);
+      expect((result.content[0] as any).text).toMatch(/invalid|at least|min/i);
+    });
+
+    it("rejects batch larger than 10 with a max-count message", async () => {
+      const agents = Array(11).fill({ agent: "claude", task: "x" });
+      const result = await client.callTool({
+        name: "spawn_agents",
+        arguments: { agents },
+      });
+      expect(result.isError).toBe(true);
+      expect((result.content[0] as any).text).toMatch(/10|max/i);
+    });
+
+    it("response includes waitingAgents array listing only the paused agentIds", async () => {
+      let n = 0;
+      vi.mocked(spawn).mockImplementation(() => {
+        n++;
+        if (n === 1) {
+          return createFakeProcess({ stdout: "ok\n", exitCode: 0 }) as unknown as child_process.ChildProcess;
+        }
+        return createFakeProcess({ question: "?" }) as unknown as child_process.ChildProcess;
+      });
+      const result = await client.callTool({
+        name: "spawn_agents",
+        arguments: {
+          agents: [
+            { agent: "claude", task: "fast" },
+            { agent: "claude", task: "pause" },
+            { agent: "claude", task: "pause2" },
+          ],
+        },
+      });
+      const data = parseResult(result as any);
+      expect(Array.isArray(data.waitingAgents)).toBe(true);
+      expect(data.waitingAgents).toHaveLength(2);
+      for (const id of data.waitingAgents) {
+        expect(id).toMatch(/^claude-[0-9a-f]{16}$/);
+      }
+    });
+  });
+
+  describe("Step 6: get_status output reporting", () => {
+    it("reports outputBytes for accumulated output", async () => {
+      vi.mocked(spawn).mockImplementationOnce(() =>
+        createFakeProcess({ question: "?" }) as unknown as child_process.ChildProcess
+      );
+      await client.callTool({
+        name: "spawn_agent",
+        arguments: { agent: "claude", task: "byte test" },
+      });
+      const result = await client.callTool({
+        name: "get_status",
+        arguments: {},
+      });
+      const data = parseResult(result as any);
+      const session = data.sessions[0];
+      expect(typeof session.outputBytes).toBe("number");
+      expect(session.outputBytes).toBeGreaterThan(0);
+      expect(session.truncated).toBe(false);
+    });
+  });
+
+  describe("kill_agent contract (Step 4)", () => {
+    it("kill of a still-running session returns killed: true and signaled: true", async () => {
+      const ctrl = createInteractive();
+      vi.mocked(spawn).mockImplementationOnce(() => {
+        queueMicrotask(() => ctrl.sendQuestion("?"));
+        return ctrl.proc as unknown as child_process.ChildProcess;
+      });
+      const spawnRes = await client.callTool({
+        name: "spawn_agent",
+        arguments: { agent: "claude", task: "long" },
+      });
+      const { agentId } = parseResult(spawnRes as any);
+
+      const killRes = await client.callTool({
+        name: "kill_agent",
+        arguments: { agentId },
+      });
+      const data = parseResult(killRes as any);
+      expect(data.killed).toBe(true);
+      expect(data.signaled).toBe(true);
+      expect(data.signal).toBe("SIGTERM");
+    });
+
+    it("kill of an already-done session returns killed: false with reason: already terminal", async () => {
+      vi.mocked(spawn).mockImplementationOnce(() =>
+        createFakeProcess({ stdout: "ok\n", exitCode: 0 }) as unknown as child_process.ChildProcess
+      );
+      const spawnRes = await client.callTool({
+        name: "spawn_agent",
+        arguments: { agent: "claude", task: "fast" },
+      });
+      const { agentId } = parseResult(spawnRes as any);
+      // Session is now done
+      const killRes = await client.callTool({
+        name: "kill_agent",
+        arguments: { agentId },
+      });
+      const data = parseResult(killRes as any);
+      expect(data.killed).toBe(false);
+      expect(data.reason).toBe("already terminal");
+      expect(data.state).toBe("done");
+    });
+
+    it("kill where proc.kill returns false reports killed: false, signaled: false", async () => {
+      const ctrl = createInteractive({ killReturns: false });
+      vi.mocked(spawn).mockImplementationOnce(() => {
+        queueMicrotask(() => ctrl.sendQuestion("?"));
+        return ctrl.proc as unknown as child_process.ChildProcess;
+      });
+      const spawnRes = await client.callTool({
+        name: "spawn_agent",
+        arguments: { agent: "claude", task: "ghost" },
+      });
+      const { agentId } = parseResult(spawnRes as any);
+
+      const killRes = await client.callTool({
+        name: "kill_agent",
+        arguments: { agentId },
+      });
+      const data = parseResult(killRes as any);
+      expect(data.killed).toBe(false);
+      expect(data.signaled).toBe(false);
     });
   });
 });

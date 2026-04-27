@@ -1,14 +1,42 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { ChildProcess } from "node:child_process";
+import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
+import { EventEmitter } from "node:events";
+import { PassThrough, Writable } from "node:stream";
 import {
-  createSession,
+  registerSession,
   getSession,
   listSessions,
   deleteSession,
 } from "../session-store.js";
+import { createProcessSession, type ProcessSession } from "../process-session.js";
 
-function fakeProcess(): ChildProcess {
-  return { pid: 1234, kill: () => true } as unknown as ChildProcess;
+function fakeChild() {
+  const ee = new EventEmitter() as EventEmitter & {
+    stdout: PassThrough;
+    stderr: PassThrough;
+    stdin: Writable;
+    pid: number;
+    kill: () => boolean;
+  };
+  ee.stdout = new PassThrough();
+  ee.stderr = new PassThrough();
+  ee.stdin = new Writable({ write(_c, _e, cb) { cb(); } });
+  ee.pid = 1;
+  ee.kill = () => true;
+  return ee;
+}
+
+function makeSession(agentId: string): ProcessSession {
+  const child = fakeChild();
+  return createProcessSession({
+    agentId,
+    agent: "claude",
+    task: "t",
+    command: "x",
+    args: [],
+    env: {},
+    timeoutMs: 60_000,
+    spawnImpl: ((_c: string, _a: string[], _o: unknown) => child) as unknown as typeof import("node:child_process").spawn,
+  });
 }
 
 describe("session-store", () => {
@@ -16,21 +44,10 @@ describe("session-store", () => {
     for (const s of listSessions()) deleteSession(s.agentId);
   });
 
-  it("creates and retrieves a session", () => {
-    const session = createSession({
-      agentId: "test-1",
-      agent: "claude",
-      task: "hello",
-      process: fakeProcess(),
-      status: "running",
-    });
-
-    expect(session.agentId).toBe("test-1");
-    expect(session.output).toEqual([]);
-    expect(session.startedAt).toBeInstanceOf(Date);
-
-    const retrieved = getSession("test-1");
-    expect(retrieved).toBe(session);
+  it("registers and retrieves a session", () => {
+    const s = makeSession("test-1");
+    registerSession(s);
+    expect(getSession("test-1")).toBe(s);
   });
 
   it("returns undefined for unknown agentId", () => {
@@ -38,23 +55,135 @@ describe("session-store", () => {
   });
 
   it("lists all sessions", () => {
-    createSession({ agentId: "a", agent: "claude", task: "t1", process: fakeProcess(), status: "running" });
-    createSession({ agentId: "b", agent: "codex", task: "t2", process: fakeProcess(), status: "done" });
-
+    registerSession(makeSession("a"));
+    registerSession(makeSession("b"));
     const all = listSessions();
     expect(all).toHaveLength(2);
     expect(all.map((s) => s.agentId).sort()).toEqual(["a", "b"]);
   });
 
   it("deletes a session", () => {
-    createSession({ agentId: "del-me", agent: "claude", task: "x", process: fakeProcess(), status: "running" });
+    registerSession(makeSession("del-me"));
     expect(getSession("del-me")).toBeDefined();
-
     deleteSession("del-me");
     expect(getSession("del-me")).toBeUndefined();
   });
 
   it("deleting a nonexistent session is a no-op", () => {
     expect(() => deleteSession("ghost")).not.toThrow();
+  });
+});
+
+describe("session-store already-terminal-on-register", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    for (const s of listSessions()) deleteSession(s.agentId);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("schedules eviction immediately when session is already terminal at register time", async () => {
+    const child = fakeChild();
+    const session = createProcessSession({
+      agentId: "term-1",
+      agent: "claude",
+      task: "t",
+      command: "x",
+      args: [],
+      env: {},
+      timeoutMs: 60_000,
+      spawnImpl: ((_c: string, _a: string[], _o: unknown) => child) as unknown as typeof import("node:child_process").spawn,
+    });
+    // Close the child before registering
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", 0, null);
+    await Promise.resolve();
+    expect(session.state.kind).toBe("done");
+
+    registerSession(session);
+    expect(getSession("term-1")).toBeDefined();
+
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1000);
+    expect(getSession("term-1")).toBeUndefined();
+  });
+});
+
+describe("session-store max sessions", () => {
+  beforeEach(() => {
+    for (const s of listSessions()) deleteSession(s.agentId);
+  });
+
+  it("throws when registering beyond the max active session limit", () => {
+    for (let i = 0; i < 50; i++) {
+      registerSession(makeSession(`max-${i}`));
+    }
+    expect(() => registerSession(makeSession("max-overflow"))).toThrow(/limit/i);
+  });
+
+  it("does not count terminal sessions toward the limit", () => {
+    vi.useFakeTimers();
+    try {
+      for (let i = 0; i < 50; i++) {
+        const child = fakeChild();
+        const s = createProcessSession({
+          agentId: `term-${i}`,
+          agent: "claude",
+          task: "t",
+          command: "x",
+          args: [],
+          env: {},
+          timeoutMs: 60_000,
+          spawnImpl: ((_c: string, _a: string[], _o: unknown) => child) as unknown as typeof import("node:child_process").spawn,
+        });
+        child.stdout.end();
+        child.stderr.end();
+        child.emit("close", 0, null);
+        registerSession(s);
+      }
+      expect(() => registerSession(makeSession("active-ok"))).not.toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("session-store TTL (Step 6)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    for (const s of listSessions()) deleteSession(s.agentId);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("removes a terminal session from listSessions after 5 minutes", async () => {
+    const child = fakeChild();
+    const session = createProcessSession({
+      agentId: "ttl-1",
+      agent: "claude",
+      task: "t",
+      command: "x",
+      args: [],
+      env: {},
+      timeoutMs: 60_000,
+      spawnImpl: ((_c: string, _a: string[], _o: unknown) => child) as unknown as typeof import("node:child_process").spawn,
+    });
+    registerSession(session);
+
+    // Trigger close
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", 0, null);
+
+    // Allow synchronous transitions
+    await Promise.resolve();
+    expect(listSessions()).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1000);
+    expect(listSessions()).toHaveLength(0);
   });
 });

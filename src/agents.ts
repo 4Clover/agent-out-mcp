@@ -1,31 +1,30 @@
 // Known CLI agents and their invocation config.
 // Extend this or override via ~/.agent-link/config.json
 
-export interface AgentConfig {
-  command: string;
-  args: string[];
-  promptFlag: string | null;
-}
+import { agentConfigSchema, AgentConfigSchema } from "./schemas.js";
+
+export type AgentConfig = AgentConfigSchema;
 
 export const DEFAULT_AGENTS: Record<string, AgentConfig> = {
-  claude: {
+  claude: agentConfigSchema.parse({
     command: "claude",
     args: ["--print", "--dangerously-skip-permissions"],
     promptFlag: null,
-  },
-  codex: {
+    flagMap: { model: "--model", thinking: "--thinking" },
+  }),
+  codex: agentConfigSchema.parse({
     command: "codex",
     args: ["--full-auto"],
     promptFlag: null,
-  },
-  gemini: {
+  }),
+  gemini: agentConfigSchema.parse({
     command: "gemini",
     args: [],
     promptFlag: null,
-  },
-  aider: {
+  }),
+  aider: agentConfigSchema.parse({
     command: "aider",
     args: ["--yes-always", "--no-pretty"],
     promptFlag: "--message",
-  },
+  }),
 };

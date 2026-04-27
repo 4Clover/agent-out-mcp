@@ -2,25 +2,32 @@
 
 > **Stack:** raw-http | none | unknown | typescript
 
-> 0 routes | 0 models | 0 components | 3 lib files | 1 env vars | 0 middleware | 0% test coverage
-> **Token savings:** this file is ~600 tokens. Without it, AI exploration would cost ~3,200 tokens. **Saves ~2,700 tokens per conversation.**
-> **Last scanned:** 2026-04-26 18:12 — re-run after significant changes
+> 0 routes | 0 models | 0 components | 4 lib files | 1 env vars | 0 middleware | 19 events | 0% test coverage
+> **Token savings:** this file is ~1,000 tokens. Without it, AI exploration would cost ~8,100 tokens. **Saves ~7,100 tokens per conversation.**
+> **Last scanned:** 2026-04-26 23:01 — re-run after significant changes
 
 ---
 
 # Libraries
 
 - `src/index.ts` — function createServer: () => McpServer
+- `src/process-session.ts`
+  - function createProcessSession: (opts) => ProcessSession
+  - interface ProcessSessionEvents
+  - interface ProcessSession
+  - interface CreateProcessSessionOptions
+  - type SessionState
+  - type WaitResult
+  - _...1 more_
 - `src/session-store.ts`
-  - function createSession: (partial, "output" | "startedAt">) => AgentSession
-  - function getSession: (agentId) => AgentSession | undefined
-  - function listSessions: () => AgentSession[]
+  - function registerSession: (session) => void
+  - function getSession: (agentId) => ProcessSession | undefined
+  - function listSessions: () => ProcessSession[]
   - function deleteSession: (agentId) => void
-  - interface AgentSession
 - `src/spawn-agent.ts`
-  - function parseQuestion: (text) => string
   - function resolveAgentConfig: (agentName) => Promise<AgentConfig | null>
   - function listAvailableAgents: () => Promise<string[]>
+  - function resolveEnv: (cfg, "env">, base) => NodeJS.ProcessEnv
   - function spawnAgent: (opts) => Promise<SpawnResult>
   - interface SpawnResult
 
@@ -30,7 +37,7 @@
 
 ## Environment Variables
 
-- `AGENT_LINK_CONFIG` **required** — src/spawn-agent.ts
+- `AGENT_LINK_CONFIG` **required** — src/__tests__/config-loading.test.ts
 
 ## Config Files
 
@@ -46,26 +53,52 @@
 
 ## Most Imported Files (change these carefully)
 
+- `src/spawn-agent.ts` — imported by **7** files
+- `src/process-session.ts` — imported by **4** files
 - `src/session-store.ts` — imported by **3** files
-- `src/spawn-agent.ts` — imported by **2** files
-- `src/schemas.ts` — imported by **2** files
+- `src/schemas.ts` — imported by **3** files
 - `src/index.ts` — imported by **1** files
 - `src/agents.ts` — imported by **1** files
 
 ## Import Map (who imports what)
 
+- `src/spawn-agent.ts` ← `src/__tests__/config-loading.test.ts`, `src/__tests__/config-loading.test.ts`, `src/__tests__/config-loading.test.ts`, `src/__tests__/config-loading.test.ts`, `src/__tests__/config-loading.test.ts` +2 more
+- `src/process-session.ts` ← `src/__tests__/session-store.test.ts`, `src/index.ts`, `src/session-store.ts`, `src/spawn-agent.ts`
 - `src/session-store.ts` ← `src/__tests__/server.test.ts`, `src/index.ts`, `src/spawn-agent.ts`
-- `src/spawn-agent.ts` ← `src/__tests__/spawn-agent.test.ts`, `src/index.ts`
-- `src/schemas.ts` ← `src/index.ts`, `src/spawn-agent.ts`
+- `src/schemas.ts` ← `src/agents.ts`, `src/index.ts`, `src/spawn-agent.ts`
 - `src/index.ts` ← `src/__tests__/server.test.ts`
 - `src/agents.ts` ← `src/spawn-agent.ts`
+
+---
+
+# Events & Queues
+
+- `exit` [event] — `src/__tests__/process-session.test.ts`
+- `question` [event] — `src/__tests__/process-session.test.ts`
+- `first?` [event] — `src/__tests__/server.test.ts`
+- `second?` [event] — `src/__tests__/server.test.ts`
+- `q1` [event] — `src/__tests__/server.test.ts`
+- `q2` [event] — `src/__tests__/server.test.ts`
+- `?` [event] — `src/__tests__/server.test.ts`
+- `test-1` [event] — `src/__tests__/session-store.test.ts`
+- `nonexistent` [event] — `src/__tests__/session-store.test.ts`
+- `a` [event] — `src/__tests__/session-store.test.ts`
+- `b` [event] — `src/__tests__/session-store.test.ts`
+- `del-me` [event] — `src/__tests__/session-store.test.ts`
+- `ghost` [event] — `src/__tests__/session-store.test.ts`
+- `term-1` [event] — `src/__tests__/session-store.test.ts`
+- `max-${i}` [event] — `src/__tests__/session-store.test.ts`
+- `max-overflow` [event] — `src/__tests__/session-store.test.ts`
+- `active-ok` [event] — `src/__tests__/session-store.test.ts`
+- `output` [event] — `src/process-session.ts`
+- `line` [event] — `src/process-session.ts`
 
 ---
 
 # Test Coverage
 
 > **0%** of routes and models are covered by tests
-> 3 test files found
+> 6 test files found
 
 ---
 

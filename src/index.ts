@@ -2,14 +2,15 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { spawnAgentSchema } from "./schemas.js";
-import { spawnAgent, listAvailableAgents, parseQuestion } from "./spawn-agent.js";
+import { spawnAgentSchema, spawnAgentsBatchSchema } from "./schemas.js";
+import { spawnAgent, listAvailableAgents } from "./spawn-agent.js";
 import { getSession, listSessions, deleteSession } from "./session-store.js";
+import { TERMINAL_KINDS } from "./process-session.js";
 
 export function createServer(): McpServer {
   const server = new McpServer({
     name: "agent-link-mcp",
-    version: "1.0.0",
+    version: "2.0.0",
   });
 
   registerTools(server);
@@ -20,9 +21,12 @@ function textResult(data: unknown, isError = false) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }], isError };
 }
 
-function registerTools(server: McpServer): void {
+function statusOf(kind: string): string {
+  if (kind === "killing") return "running";
+  return kind;
+}
 
-// ── spawn_agent ───────────────────────────────────────────────────────────────
+function registerTools(server: McpServer): void {
 
 server.tool(
   "spawn_agent",
@@ -46,8 +50,6 @@ server.tool(
   }
 );
 
-// ── spawn_agents (parallel) ───────────────────────────────────────────────────
-
 server.tool(
   "spawn_agents",
   "Spawn multiple agents in parallel. All agents run concurrently. " +
@@ -55,16 +57,26 @@ server.tool(
   {
     agents: z
       .array(z.object(spawnAgentSchema))
-      .describe("Array of agent spawn configs to run in parallel"),
+      .min(1)
+      .max(10)
+      .describe("Array of agent spawn configs to run in parallel (1..10)"),
   },
   async ({ agents }) => {
+    const parsed = spawnAgentsBatchSchema.safeParse(agents);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      return textResult(
+        { error: `Invalid spawn_agents.agents: ${issue?.message ?? "must contain 1 to 10 entries"}` },
+        true
+      );
+    }
     const results = await Promise.allSettled(
-      agents.map((a) => spawnAgent(a))
+      parsed.data.map((a) => spawnAgent(a))
     );
 
     const formatted = results.map((r, i) => {
       if (r.status === "fulfilled") return r.value;
-      return { agent: agents[i].agent, status: "error", error: r.reason?.message ?? "Unknown error" };
+      return { agent: parsed.data[i].agent, status: "error", error: r.reason?.message ?? "Unknown error" };
     });
 
     const summary = {
@@ -74,12 +86,17 @@ server.tool(
       waiting: formatted.filter((r) => r.status === "waiting_for_reply").length,
     };
 
+    const waitingAgents: string[] = [];
+    for (const r of formatted) {
+      if (r.status === "waiting_for_reply" && "agentId" in r && typeof r.agentId === "string") {
+        waitingAgents.push(r.agentId);
+      }
+    }
+
     const hasFailures = summary.failed > 0;
-    return textResult({ summary, results: formatted }, hasFailures);
+    return textResult({ summary, results: formatted, waitingAgents }, hasFailures);
   }
 );
-
-// ── reply ─────────────────────────────────────────────────────────────────────
 
 server.tool(
   "reply",
@@ -92,81 +109,90 @@ server.tool(
   async ({ agentId, message }) => {
     const session = getSession(agentId);
     if (!session) {
-      return textResult({ error: `No session found for agentId: ${agentId}` }, true);
-    }
-
-    if (session.status !== "waiting_for_reply") {
       return textResult(
-        { error: `Session ${agentId} is not waiting for a reply (status: ${session.status})` },
+        { agentId: null, error: `No session found for agentId: ${agentId}` },
         true
       );
     }
 
-    session.status = "running";
-    session.pendingQuestion = undefined;
-    const outputStart = session.output.length;
-
-    if (!session.process.stdin?.writable) {
-      return textResult({ error: `Agent ${agentId} stdin is closed` }, true);
+    if (session.state.kind !== "waiting_for_reply") {
+      return textResult(
+        {
+          agentId,
+          error: `Session ${agentId} is not waiting for a reply (status: ${statusOf(session.state.kind)})`,
+        },
+        true
+      );
     }
-    session.process.stdin.write(`${message}\n`);
 
-    const result = await new Promise<Record<string, unknown>>((resolve) => {
-      let resolved = false;
+    if (!session.write(`${message}\n`)) {
+      return textResult({ agentId, error: `Agent ${agentId} stdin is closed` }, true);
+    }
 
-      const stdout = session.process.stdout!;
-
-      const cleanup = () => {
-        stdout.off("data", onData);
-        session.process.off("close", onClose);
-        clearTimeout(timer);
-      };
-
-      const collectOutput = () =>
-        session.output.slice(outputStart).join("").trim();
-
-      const onData = (chunk: Buffer) => {
-        const text = chunk.toString();
-        session.output.push(text);
-
-        if (text.includes("[QUESTION]")) {
-          const question = parseQuestion(text);
-          session.status = "waiting_for_reply";
-          session.pendingQuestion = question;
-          if (!resolved) {
-            resolved = true;
-            cleanup();
-            resolve({ agentId, status: "waiting_for_reply", question });
-          }
-        }
-      };
-
-      const onClose = (code: number | null) => {
-        session.status = code === 0 ? "done" : "error";
-        if (!resolved) {
-          resolved = true;
-          cleanup();
-          resolve({ agentId, status: session.status, result: collectOutput() });
-        }
-      };
-
-      const timer = setTimeout(() => {
-        if (!resolved) {
-          resolved = true;
-          cleanup();
-          resolve({ agentId, status: "running", partial: collectOutput() });
-        }
-      }, 30_000);
-
-      stdout.on("data", onData);
-      session.process.on("close", onClose);
-    });
-
-    return textResult(result);
+    const r = await session.waitNext({ timeoutMs: 30_000 });
+    if (r.kind === "question") {
+      return textResult({
+        agentId,
+        status: "waiting_for_reply",
+        question: r.question,
+        partial: r.output,
+      });
+    }
+    if (r.kind === "close") {
+      const state = r.state;
+      const result = "result" in state ? state.result.trim() : "";
+      const status = statusOf(state.kind);
+      const payload: Record<string, unknown> = { agentId, status, result };
+      if (state.kind === "error") payload.error = state.error;
+      return textResult(payload);
+    }
+    // timeout: state remains running; caller can use wait_agent to await next event
+    return textResult({ agentId, status: "running", partial: r.output });
   }
 );
 
-// ── kill_agent ────────────────────────────────────────────────────────────────
+server.tool(
+  "wait_agent",
+  "Wait for the next event (question or close) from a running agent without writing to its stdin. " +
+    "Use this after a reply timeout to observe the next [QUESTION] or process exit.",
+  {
+    agentId: z.string().describe("The agentId returned by spawn_agent"),
+    timeoutMs: z
+      .number()
+      .int()
+      .min(1)
+      .max(3_600_000)
+      .optional()
+      .describe("How long to wait before returning timeout status (default: 30000)"),
+  },
+  async ({ agentId, timeoutMs }) => {
+    const session = getSession(agentId);
+    if (!session) {
+      return textResult(
+        { agentId: null, error: `No session found for agentId: ${agentId}` },
+        true
+      );
+    }
+    const r = await session.waitNext({ timeoutMs: timeoutMs ?? 30_000 });
+    if (r.kind === "question") {
+      return textResult({
+        agentId,
+        status: "waiting_for_reply",
+        question: r.question,
+        partial: r.output,
+      });
+    }
+    if (r.kind === "close") {
+      const state = r.state;
+      const result = "result" in state ? state.result.trim() : "";
+      const status = statusOf(state.kind);
+      const payload: Record<string, unknown> = { agentId, status, result };
+      if (state.kind === "error") payload.error = state.error;
+      return textResult(payload);
+    }
+    return textResult({ agentId, status: "running", partial: r.output });
+  }
+);
 
 server.tool(
   "kill_agent",
@@ -182,15 +208,31 @@ server.tool(
   async ({ agentId, signal }) => {
     const session = getSession(agentId);
     if (!session) {
-      return textResult({ error: `Session not found: ${agentId}` }, true);
+      return textResult({ agentId: null, error: `Session not found: ${agentId}` }, true);
     }
-    session.process.kill(signal);
-    deleteSession(agentId);
-    return textResult({ agentId, killed: true, signal });
+    const wasTerminal = TERMINAL_KINDS.has(session.state.kind);
+    const signaled = session.kill(signal);
+    if (wasTerminal) {
+      return textResult({
+        agentId,
+        killed: false,
+        signaled: false,
+        reason: "already terminal",
+        state: session.state.kind,
+        signal,
+      });
+    }
+    const r = await session.waitNext({ timeoutMs: 30_000 });
+    const finalState = r.kind === "close" ? r.state.kind : session.state.kind;
+    return textResult({
+      agentId,
+      killed: signaled,
+      signaled,
+      finalState: statusOf(finalState),
+      signal,
+    });
   }
 );
-
-// ── list_agents ───────────────────────────────────────────────────────────────
 
 server.tool(
   "list_agents",
@@ -202,29 +244,32 @@ server.tool(
   }
 );
 
-// ── get_status ────────────────────────────────────────────────────────────────
-
 server.tool(
   "get_status",
   "Get status of all active agent sessions.",
   {},
   async () => {
-    const sessions = listSessions().map((s) => ({
-      agentId: s.agentId,
-      agent: s.agent,
-      task: s.task.slice(0, 80) + (s.task.length > 80 ? "…" : ""),
-      status: s.status,
-      pendingQuestion: s.pendingQuestion,
-      startedAt: s.startedAt.toISOString(),
-      outputLines: s.output.length,
-    }));
+    const sessions = listSessions().map((s) => {
+      const state = s.state;
+      const pendingQuestion =
+        state.kind === "waiting_for_reply" ? state.question : undefined;
+      return {
+        agentId: s.agentId,
+        agent: s.agent,
+        task: s.task.slice(0, 80) + (s.task.length > 80 ? "…" : ""),
+        status: statusOf(state.kind),
+        pendingQuestion,
+        startedAt: s.startedAt.toISOString(),
+        outputChunks: s.outputChunks,
+        outputBytes: s.outputBytes,
+        truncated: s.truncated,
+      };
+    });
     return textResult({ sessions, count: sessions.length });
   }
 );
 
 } // end registerTools
-
-// ── Start server (only when run directly) ────────────────────────────────────
 
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
@@ -234,4 +279,17 @@ if (isMain) {
   const transport = new StdioServerTransport();
   const server = createServer();
   await server.connect(transport);
+
+  // Graceful shutdown of any open child processes when the server exits
+  const cleanup = () => {
+    for (const s of listSessions()) {
+      try { s.kill(); } catch { /* best-effort */ }
+      deleteSession(s.agentId);
+    }
+  };
+  process.on("SIGINT", cleanup);
+  process.on("SIGTERM", cleanup);
 }
+
+// Re-export TERMINAL_KINDS for downstream consumers checking session state
+export { TERMINAL_KINDS };

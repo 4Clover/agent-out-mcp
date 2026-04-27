@@ -11,7 +11,7 @@ custom) as subprocesses with bidirectional communication. An MCP host calls
 - Build: `just build` (tsc → dist/)
 - Typecheck: `just check` (or `npx tsc --noEmit`)
 - Test all: `just test`
-- Test single: `just test-file <name>` (e.g. `just test-file spawn-agent`)
+- Test single: `just test-file <name>` (e.g. `just test-file process-session`)
 - Test watch: `just test-watch`
 - CI (typecheck + test): `just ci`
 - Dev: `just dev` (Node 22+ required — uses `--experimental-strip-types`)
@@ -22,55 +22,88 @@ custom) as subprocesses with bidirectional communication. An MCP host calls
 
 ## Architecture
 
-Five source files in `src/`:
+Six source files in `src/`:
 
-- **index.ts** — MCP server entry point. Registers six tools (spawn_agent,
-  spawn_agents, reply, kill_agent, list_agents, get_status) on a stdio
-  transport using `@modelcontextprotocol/sdk`.
+- **index.ts** — MCP server entry point; registers seven tools on stdio.
 - **agents.ts** — `AgentConfig` type and `DEFAULT_AGENTS` map (claude, codex,
-  gemini, aider). Each config specifies the CLI command, static args, and
-  whether the prompt uses a flag (`promptFlag`) or positional arg.
-- **schemas.ts** — Zod schemas for tool inputs and the `SpawnOptions` type.
+  gemini, aider) with per-CLI `flagMap` and env settings.
+- **schemas.ts** — Zod schemas for all tool inputs and config validation.
   Update schemas here, not in index.ts or spawn-agent.ts.
-- **spawn-agent.ts** — Core spawning logic. Loads user overrides from
-  `~/.agent-link/config.json` (or `AGENT_LINK_CONFIG` env var), merges with
-  defaults, builds the prompt (injecting context fields), spawns the child
-  process, and monitors stdout for the `[QUESTION]` protocol marker.
-- **session-store.ts** — In-memory `Map<string, AgentSession>` keyed by
-  agentId. Sessions are intentionally ephemeral — lost on server restart
-  because MCP hosts spawn a fresh server process per session.
+- **process-session.ts** — Lifecycle owner for a child process. State machine
+  with terminal-state guarantee, byte-capped output buffer (8 MB,
+  drop-oldest), and FIFO waiter queue powering `waitNext`.
+- **spawn-agent.ts** — Loads user config from `~/.agent-link/config.json`
+  (or `AGENT_LINK_CONFIG`), Zod-validates, builds args via `flagMap`,
+  resolves env, and creates a `ProcessSession`.
+- **session-store.ts** — In-memory `Map<string, ProcessSession>` with
+  5-minute eviction timer for terminal sessions.
 
 ## Bidirectional Protocol
 
-When a subprocess prints `[QUESTION] <text>` to stdout, spawnAgent resolves
-immediately with `{ status: "waiting_for_reply", question }`. The subprocess
-stays alive. The host calls `reply(agentId, message)` which writes to stdin
-and waits for the next `[QUESTION]` or process exit.
+A subprocess line starting with `[QUESTION] <text>` transitions the session
+to `waiting_for_reply`. The host calls `reply(agentId, message)` which
+writes to stdin and waits for the next event:
 
-- 30-second silence timeout in `reply` returns partial output without killing
-  the process.
-- 1-hour default timeout for the overall spawn (configurable via `timeoutMs`).
+- Next `[QUESTION]` → `{ status: "waiting_for_reply", question, partial }`.
+- Process close → `{ status: "done"|"error"|"killed", result, error? }`.
+- 30-second silence → `{ status: "running", partial }`. The host should
+  call `wait_agent` to await the next event without writing duplicate input.
+
+The marker must be exactly `[QUESTION] ` (with trailing space) at the
+**start of a line**. Mid-line substrings do not trigger.
+
+The spawn timeout (default 1 hour) survives question events — a runaway
+child still terminates at the deadline. After timeout-triggered kill, a
+late `'close 0'` is **not** treated as `done` (terminal-state guarantee).
 
 ## Custom Agents
 
-Users add agents in `~/.agent-link/config.json` under an `agents` key. The
-config shape matches `AgentConfig` from `agents.ts`. Custom entries merge with
-and can override defaults. Override the config path with the
-`AGENT_LINK_CONFIG` environment variable.
+Users add agents in `~/.agent-link/config.json` under an `agents` key:
+
+```json
+{
+  "agents": {
+    "mytool": {
+      "command": "mytool",
+      "args": ["--non-interactive"],
+      "promptFlag": "--prompt",
+      "flagMap": { "model": "--model", "thinking": "--effort" },
+      "env": ["MYTOOL_TOKEN"]
+    }
+  }
+}
+```
+
+- Config is Zod-validated; typos surface as stderr warnings.
+- `flagMap` keys: `model`, `thinking` only.
+- `env` defaults to a safe allowlist; `PATH` is always present. Set
+  `"passthrough"` to inherit the full parent env.
+- Keys are lowercased; a user entry matching a built-in name overrides it.
+- Override the config path with `AGENT_LINK_CONFIG` env var.
 
 ## Conventions
 
-- ESM throughout (`"type": "module"` in package.json, Node16 module resolution).
-- All imports use `.js` extensions (required for ESM + tsc).
-- `strict: true` in tsconfig.
+- ESM throughout; all imports use `.js` extensions (required for ESM + tsc).
+- `cwd` in `spawn_agent` must be an absolute path (POSIX or Windows).
+- Output is byte-capped at 8 MB per session (drop-oldest).
+- Maximum 50 concurrent sessions enforced by session-store.
+
+## MCP wire surfaces
+
+- New in v2.0.0: `wait_agent` tool.
+- Renamed in v2.0.0: `outputLines` → `outputChunks` on `get_status`.
+- New in v2.0.0: `waitingAgents: string[]` on `spawn_agents` response.
+- Unknown-agent error responses use `agentId: null` (not the literal `""`).
+
+See [`CHANGELOG.md`](./CHANGELOG.md) for the full v2.0.0 migration notes.
 
 ## Testing
 
 - Framework: vitest (config in `vitest.config.ts`)
 - Tests live in `src/__tests__/` and are excluded from the tsc build.
-- Three test files: `server.test.ts`, `session-store.test.ts`, `spawn-agent.test.ts`.
-- Zod schemas and the `SpawnOptions` type live in `schemas.ts` — update
-  there, not in index.ts or spawn-agent.ts.
+- Six test files: `server.test.ts`, `session-store.test.ts`,
+  `spawn-agent.test.ts`, `schemas.test.ts`, `process-session.test.ts`,
+  `config-loading.test.ts`.
 
 ## Constraints
 
@@ -78,11 +111,13 @@ and can override defaults. Override the config path with the
   `--dangerously-skip-permissions`, codex: `--full-auto`, aider:
   `--yes-always`). These are not a security issue to fix — they are required
   for non-interactive subprocess operation.
-- Sessions are ephemeral by design. Do not add persistence — the MCP host
-  spawns a fresh server process per session.
+- Sessions are ephemeral by design. Terminal sessions auto-expire from the
+  in-memory store after 5 minutes; restart of the MCP server process
+  also clears them. Do not add persistence — the MCP host spawns a fresh
+  server process per session.
 - The `[QUESTION]` protocol marker must be exactly `[QUESTION] ` (with a
-  trailing space) at the start of a stdout line. Do not change the format
-  without updating all detection logic in both spawn-agent.ts and index.ts.
+  trailing space) at the **start of a line**. Do not change the format
+  without updating the line regex in `process-session.ts`.
 - Do not add interactive prompts or TTY detection — the server communicates
   only via MCP stdio transport.
 - The server uses a single stdio transport (`StdioServerTransport`). Do not
@@ -92,8 +127,9 @@ and can override defaults. Override the config path with the
 
 - Dev mode (`just dev`) requires Node 22+ for `--experimental-strip-types`.
   The build (`just build`) works on any Node that supports ES2022.
-- `isCommandAvailable` in spawn-agent.ts spawns and immediately kills a
-  process to check PATH availability — it is not a reliable check for all CLIs.
-- The `[QUESTION]` detection splits on `[QUESTION]` anywhere in a stdout
-  chunk, not just at line boundaries. If an agent's normal output contains
-  this exact string, it will trigger a false positive.
+- `isCommandAvailable` in spawn-agent.ts uses the `which` v4 npm package.
+  It does not exec the target — it only verifies PATH resolution.
+- Listener order in `process-session.ts` is intentional: the raw-byte
+  output buffer subscribes to `proc.stdout` *before* `readline` is created,
+  so `waitNext` callers see the full chunk that contains a `[QUESTION]`
+  line in their captured output (not just the lines preceding it).
